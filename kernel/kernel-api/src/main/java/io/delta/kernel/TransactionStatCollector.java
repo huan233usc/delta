@@ -15,9 +15,11 @@
  */
 package io.delta.kernel;
 
+import io.delta.kernel.engine.Engine;
 import io.delta.kernel.internal.actions.AddFile;
 import io.delta.kernel.internal.actions.Metadata;
 import io.delta.kernel.internal.actions.Protocol;
+import java.io.IOException;
 
 /** Collects stats for transactions to mutate a Delta table. */
 public interface TransactionStatCollector {
@@ -28,5 +30,5 @@ public interface TransactionStatCollector {
 
   void recordProtocol(Protocol protocol);
 
-  void onCommitSucceeds();
+  void onCommitSucceeds(Engine engine, long commitAsVersion) throws IOException;
 }

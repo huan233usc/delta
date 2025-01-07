@@ -15,9 +15,11 @@
  */
 package io.delta.kernel;
 
+import io.delta.kernel.engine.Engine;
 import io.delta.kernel.internal.actions.AddFile;
 import io.delta.kernel.internal.actions.Metadata;
 import io.delta.kernel.internal.actions.Protocol;
+import java.io.IOException;
 
 public class LoggingTransactionStatCollector implements TransactionStatCollector {
   @Override
@@ -36,7 +38,7 @@ public class LoggingTransactionStatCollector implements TransactionStatCollector
   }
 
   @Override
-  public void onCommitSucceeds() {
+  public void onCommitSucceeds(Engine engine, long commitAsVersion) throws IOException {
     System.out.println("on commit succeeds");
   }
 }

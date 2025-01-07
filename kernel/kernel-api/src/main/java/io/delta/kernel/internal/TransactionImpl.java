@@ -77,6 +77,8 @@ public class TransactionImpl implements Transaction {
 
   private TransactionStatCollector logging = new LoggingTransactionStatCollector();
 
+  private CrcFileTransactionStatCollector crc;
+
   public TransactionImpl(
       boolean isNewTable,
       Path dataPath,
@@ -102,6 +104,7 @@ public class TransactionImpl implements Transaction {
     this.shouldUpdateMetadata = shouldUpdateMetadata;
     this.shouldUpdateProtocol = shouldUpdateProtocol;
     this.clock = clock;
+    this.crc = new CrcFileTransactionStatCollector(logPath);
   }
 
   @Override
@@ -137,7 +140,7 @@ public class TransactionImpl implements Transaction {
   }
 
   public List<TransactionStatCollector> getStatCollectors() {
-    return Arrays.asList(logging);
+    return Arrays.asList(logging, crc);
   }
 
   @Override
@@ -279,7 +282,7 @@ public class TransactionImpl implements Transaction {
       for (TransactionStatCollector collector : getStatCollectors()) {
         collector.recordMetadata(this.metadata);
         collector.recordProtocol(this.protocol);
-        collector.onCommitSucceeds();
+        collector.onCommitSucceeds(engine, commitAsVersion);
       }
       return new TransactionCommitResult(commitAsVersion, isReadyForCheckpoint(commitAsVersion));
     } catch (FileAlreadyExistsException e) {

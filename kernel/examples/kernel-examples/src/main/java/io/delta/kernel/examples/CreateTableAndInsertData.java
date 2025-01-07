@@ -226,7 +226,8 @@ public class CreateTableAndInsertData extends BaseTableWriter {
                     engine,
                     txnState,
                     dataFiles,
-                    writeContext);
+                    writeContext,
+                    txn.getStatCollectors());
 
             // Now add all the partition data actions to the main data actions list. In a
             // distributed query engine, the partition data is written to files at tasks on executor
@@ -307,7 +308,7 @@ public class CreateTableAndInsertData extends BaseTableWriter {
         // Now convert the data file status to data actions that needs to be written to the Delta
         // table log
         CloseableIterator<Row> dataActions =
-                Transaction.generateAppendActions(engine, txnState, dataFiles, writeContext);
+                Transaction.generateAppendActions(engine, txnState, dataFiles, writeContext, txn.getStatCollectors());
 
 
         // Create a iterable out of the data actions. If the contents are too big to fit in memory,
@@ -386,7 +387,7 @@ public class CreateTableAndInsertData extends BaseTableWriter {
         // Now convert the data file status to data actions that needs to be written to the Delta
         // table log
         CloseableIterator<Row> dataActions =
-                Transaction.generateAppendActions(engine, txnState, dataFiles, writeContext);
+                Transaction.generateAppendActions(engine, txnState, dataFiles, writeContext, txn.getStatCollectors());
 
 
         // Create a iterable out of the data actions. If the contents are too big to fit in memory,

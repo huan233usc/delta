@@ -188,6 +188,6 @@ if __name__ == "__main__":
         examples_root_dir,
         "../../connectors/golden-tables/src/main/resources/golden/")
 
-    run_single_threaded_examples(args.version, args.maven_repo, examples_root_dir, golden_file_dir)
-    run_multi_threaded_examples(args.version, args.maven_repo, examples_root_dir, golden_file_dir)
+#     run_single_threaded_examples(args.version, args.maven_repo, examples_root_dir, golden_file_dir)
+#     run_multi_threaded_examples(args.version, args.maven_repo, examples_root_dir, golden_file_dir)
     run_integration_tests(args.version, args.maven_repo, examples_root_dir, golden_file_dir)

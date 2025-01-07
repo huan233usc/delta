@@ -49,6 +49,10 @@ public final class FileNames {
     return String.format("%s/%020d.json", path, version);
   }
 
+  public static String crcFile(Path path, long version) {
+    return String.format("%s/%020d.crc", path, version);
+  }
+
   /** Returns the version for the given delta path. */
   public static long deltaVersion(Path path) {
     return Long.parseLong(path.getName().split("\\.")[0]);
