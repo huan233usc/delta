@@ -75,6 +75,8 @@ public class TransactionImpl implements Transaction {
 
   private boolean closed; // To avoid trying to commit the same transaction again.
 
+  private TransactionStatCollector logging = new LoggingTransactionStatCollector();
+
   public TransactionImpl(
       boolean isNewTable,
       Path dataPath,
@@ -132,6 +134,10 @@ public class TransactionImpl implements Transaction {
 
   public List<DomainMetadata> getDomainMetadatas() {
     return domainMetadatas;
+  }
+
+  public List<TransactionStatCollector> getStatCollectors() {
+    return Arrays.asList(logging);
   }
 
   @Override
@@ -234,7 +240,6 @@ public class TransactionImpl implements Transaction {
       metadataActions.add(createProtocolSingleAction(protocol.toRow()));
     }
     setTxnOpt.ifPresent(setTxn -> metadataActions.add(createTxnSingleAction(setTxn.toRow())));
-
     // Check for duplicate domain metadata and if the protocol supports
     DomainMetadataUtils.validateDomainMetadatas(domainMetadatas, protocol);
 
@@ -271,6 +276,11 @@ public class TransactionImpl implements Transaction {
           "Write file actions to JSON log file `%s`",
           FileNames.deltaFile(logPath, commitAsVersion));
 
+      for (TransactionStatCollector collector : getStatCollectors()) {
+        collector.recordMetadata(this.metadata);
+        collector.recordProtocol(this.protocol);
+        collector.onCommitSucceeds();
+      }
       return new TransactionCommitResult(commitAsVersion, isReadyForCheckpoint(commitAsVersion));
     } catch (FileAlreadyExistsException e) {
       throw e;
