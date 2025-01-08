@@ -294,15 +294,19 @@ public class TransactionImpl implements Transaction {
                   readSnapshot.getMetadata(),
                   readSnapshot.getTableSizeBytes(),
                   readSnapshot.getNumFiles())
-              : readSnapshot.getFullSnapshotHint(engine);
+              : readSnapshot.getFullSnapshotHint(
+                  engine); // TODO: we could return here and make the checkpoint write async.
 
       SnapshotHint postCommitSnapshotState =
           new SnapshotHint(
-              preCommitSnapshotState.getVersion(),
-              preCommitSnapshotState.getProtocol(),
-              preCommitSnapshotState.getMetadata(),
-              preCommitSnapshotState.getTableSizeBytes(),
-              preCommitSnapshotState.getNumFiles());
+              commitAsVersion,
+              summary.getUpdatedProtocol().orElseGet(() -> preCommitSnapshotState.getProtocol()),
+              summary.getUpdatedMetadata().orElseGet(() -> preCommitSnapshotState.getMetadata()),
+              OptionalLong.of(
+                  preCommitSnapshotState.getTableSizeBytes().getAsLong()
+                      + summary.getAddedTableSize()),
+              OptionalLong.of(
+                  preCommitSnapshotState.getNumFiles().getAsLong() + summary.getAddedFileCounts()));
 
       wrapEngineExceptionThrowsIO(
           () -> {
