@@ -73,11 +73,9 @@ public class TransactionImpl implements Transaction {
   private Metadata metadata;
   private boolean shouldUpdateMetadata;
 
+  private SnapshotStateBuilder baseSnapshotState;
+
   private boolean closed; // To avoid trying to commit the same transaction again.
-
-  private TransactionStatCollector logging = new LoggingTransactionStatCollector();
-
-  private CrcFileTransactionStatCollector crc;
 
   public TransactionImpl(
       boolean isNewTable,
@@ -91,7 +89,8 @@ public class TransactionImpl implements Transaction {
       Optional<SetTransaction> setTxnOpt,
       boolean shouldUpdateMetadata,
       boolean shouldUpdateProtocol,
-      Clock clock) {
+      Clock clock,
+      SnapshotState baseSnapshotState) {
     this.isNewTable = isNewTable;
     this.dataPath = dataPath;
     this.logPath = logPath;
@@ -104,7 +103,7 @@ public class TransactionImpl implements Transaction {
     this.shouldUpdateMetadata = shouldUpdateMetadata;
     this.shouldUpdateProtocol = shouldUpdateProtocol;
     this.clock = clock;
-    this.crc = new CrcFileTransactionStatCollector(logPath);
+    this.baseSnapshotState = new SnapshotStateBuilder(baseSnapshotState);
   }
 
   @Override
@@ -139,8 +138,8 @@ public class TransactionImpl implements Transaction {
     return domainMetadatas;
   }
 
-  public List<TransactionStatCollector> getStatCollectors() {
-    return Arrays.asList(logging, crc);
+  public SnapshotStateBuilder getBaseSnapshotState() {
+    return baseSnapshotState;
   }
 
   @Override
@@ -279,11 +278,22 @@ public class TransactionImpl implements Transaction {
           "Write file actions to JSON log file `%s`",
           FileNames.deltaFile(logPath, commitAsVersion));
 
-      for (TransactionStatCollector collector : getStatCollectors()) {
-        collector.recordMetadata(this.metadata);
-        collector.recordProtocol(this.protocol);
-        collector.onCommitSucceeds(engine, commitAsVersion);
-      }
+      getBaseSnapshotState().setMetadata(this.metadata);
+      getBaseSnapshotState().setProtocol(this.protocol);
+
+      wrapEngineExceptionThrowsIO(
+          () -> {
+            engine
+                .getJsonHandler()
+                .writeJsonFileAtomically(
+                    FileNames.crcFile(logPath, commitAsVersion),
+                    toCloseableIterator(
+                        Arrays.asList(getBaseSnapshotState().build().toCrcRow()).iterator()),
+                    false /* overwrite */);
+            return null;
+          },
+          "Write file actions to JSON log file `%s`",
+          FileNames.crcFile(logPath, commitAsVersion));
       return new TransactionCommitResult(commitAsVersion, isReadyForCheckpoint(commitAsVersion));
     } catch (FileAlreadyExistsException e) {
       throw e;

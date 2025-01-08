@@ -20,17 +20,19 @@ import static io.delta.kernel.internal.TableConfig.TOMBSTONE_RETENTION;
 
 import io.delta.kernel.ScanBuilder;
 import io.delta.kernel.Snapshot;
+import io.delta.kernel.SnapshotState;
+import io.delta.kernel.SnapshotStateBuilder;
+import io.delta.kernel.data.FilteredColumnarBatch;
+import io.delta.kernel.data.Row;
 import io.delta.kernel.engine.Engine;
-import io.delta.kernel.internal.actions.CommitInfo;
-import io.delta.kernel.internal.actions.DomainMetadata;
-import io.delta.kernel.internal.actions.Metadata;
-import io.delta.kernel.internal.actions.Protocol;
+import io.delta.kernel.internal.actions.*;
 import io.delta.kernel.internal.fs.Path;
 import io.delta.kernel.internal.replay.CreateCheckpointIterator;
 import io.delta.kernel.internal.replay.LogReplay;
 import io.delta.kernel.internal.snapshot.LogSegment;
 import io.delta.kernel.internal.util.VectorUtils;
 import io.delta.kernel.types.StructType;
+import io.delta.kernel.utils.CloseableIterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -167,5 +169,20 @@ public class SnapshotImpl implements Snapshot {
    */
   public Optional<Long> getLatestTransactionVersion(Engine engine, String applicationId) {
     return logReplay.getLatestTransactionIdentifier(engine, applicationId);
+  }
+
+  public SnapshotState getSnapshotState(Engine engine) {
+    SnapshotStateBuilder builder = new SnapshotStateBuilder(getMetadata(), getProtocol());
+    CloseableIterator<FilteredColumnarBatch> addedFilesIter =
+        logReplay.getAddFilesAsColumnarBatches(engine, true, Optional.empty());
+    while (addedFilesIter.hasNext()) {
+      FilteredColumnarBatch scanFilesBatch = addedFilesIter.next();
+      CloseableIterator<Row> scanFileRows = scanFilesBatch.getRows();
+      while (scanFileRows.hasNext()) {
+        Row scanFileRow = scanFileRows.next();
+        builder.addFile(new AddFile(InternalScanFileUtils.getAddFileEntry(scanFileRow)));
+      }
+    }
+    return builder.build();
   }
 }

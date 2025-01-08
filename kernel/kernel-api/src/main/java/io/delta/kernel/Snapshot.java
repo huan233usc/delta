@@ -71,4 +71,6 @@ public interface Snapshot {
    * @return an instance of {@link ScanBuilder}
    */
   ScanBuilder getScanBuilder(Engine engine);
+
+  SnapshotState getSnapshotState(Engine engine);
 }

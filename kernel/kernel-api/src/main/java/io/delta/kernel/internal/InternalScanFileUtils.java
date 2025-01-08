@@ -130,7 +130,7 @@ public class InternalScanFileUtils {
    * @return {@link Row} representing the {@code AddFile}
    * @throws IllegalArgumentException If the scan file row doesn't contain {@code add} file entry.
    */
-  protected static Row getAddFileEntry(Row scanFileInfo) {
+  public static Row getAddFileEntry(Row scanFileInfo) {
     if (scanFileInfo.isNullAt(ADD_FILE_ORDINAL)) {
       throw new IllegalArgumentException("There is no `add` entry in the scan file row");
     }
