@@ -287,15 +287,21 @@ public class TransactionImpl implements Transaction {
 
       // readSnapshot.getFullSnapshotHint(engine) and beyond might be done out side tnx.
       SnapshotHint preCommitSnapshotState =
-          readSnapshot.getNumFiles().isPresent()
-              ? new SnapshotHint(
-                  readSnapshot.getVersion(engine),
-                  readSnapshot.getProtocol(),
-                  readSnapshot.getMetadata(),
-                  readSnapshot.getTableSizeBytes(),
-                  readSnapshot.getNumFiles())
-              : readSnapshot.getFullSnapshotHint(
-                  engine); // TODO: we could return here and make the checkpoint write async.
+          new SnapshotHint(
+              readSnapshot.getVersion(engine),
+              readSnapshot.getProtocol(),
+              readSnapshot.getMetadata(),
+              readSnapshot.getTableSizeBytes(),
+              readSnapshot.getNumFiles());
+
+      if (!readSnapshot.getNumFiles().isPresent()) {
+        return new TransactionCommitResult(
+            commitAsVersion,
+            isReadyForCheckpoint(commitAsVersion),
+            preCommitSnapshotState,
+            summary);
+        // TODO: async tasks to build crc with by readSnapshot.getFullSnapshotHint(engine);
+      }
 
       SnapshotHint postCommitSnapshotState =
           new SnapshotHint(
