@@ -36,6 +36,7 @@ import io.delta.kernel.internal.util.*;
 import io.delta.kernel.types.StructType;
 import io.delta.kernel.utils.CloseableIterable;
 import io.delta.kernel.utils.CloseableIterator;
+import io.delta.kernel.utils.InterceptCloseableIterator;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.FileAlreadyExistsException;
@@ -138,10 +139,6 @@ public class TransactionImpl implements Transaction {
     return domainMetadatas;
   }
 
-  public SnapshotStateBuilder getBaseSnapshotState() {
-    return baseSnapshotState;
-  }
-
   @Override
   public TransactionCommitResult commit(Engine engine, CloseableIterable<Row> dataActions)
       throws ConcurrentWriteException {
@@ -236,10 +233,12 @@ public class TransactionImpl implements Transaction {
               ColumnMapping.getColumnMappingMode(metadata.getConfiguration()),
               isNewTable);
       metadataActions.add(createMetadataSingleAction(metadata.toRow()));
+      baseSnapshotState.setMetadata(this.metadata);
     }
     if (shouldUpdateProtocol || isNewTable) {
       // In the future, we need to add metadata and action when there are any changes to them.
       metadataActions.add(createProtocolSingleAction(protocol.toRow()));
+      baseSnapshotState.setProtocol(this.protocol);
     }
     setTxnOpt.ifPresent(setTxn -> metadataActions.add(createTxnSingleAction(setTxn.toRow())));
     // Check for duplicate domain metadata and if the protocol supports
@@ -264,6 +263,16 @@ public class TransactionImpl implements Transaction {
         }
       }
 
+      InterceptCloseableIterator<Row> wrappedDataAndMetadataActions =
+          new InterceptCloseableIterator<>(
+              dataAndMetadataActions,
+              r -> {
+                if (!r.isNullAt(ADD_FILE_ORDINAL)) {
+                  baseSnapshotState.addFile(new AddFile(r.getStruct(ADD_FILE_ORDINAL)));
+                }
+                return null;
+              });
+
       // Write the staged data to a delta file
       wrapEngineExceptionThrowsIO(
           () -> {
@@ -271,15 +280,12 @@ public class TransactionImpl implements Transaction {
                 .getJsonHandler()
                 .writeJsonFileAtomically(
                     FileNames.deltaFile(logPath, commitAsVersion),
-                    dataAndMetadataActions,
+                    wrappedDataAndMetadataActions,
                     false /* overwrite */);
             return null;
           },
           "Write file actions to JSON log file `%s`",
           FileNames.deltaFile(logPath, commitAsVersion));
-
-      getBaseSnapshotState().setMetadata(this.metadata);
-      getBaseSnapshotState().setProtocol(this.protocol);
 
       wrapEngineExceptionThrowsIO(
           () -> {
@@ -288,7 +294,7 @@ public class TransactionImpl implements Transaction {
                 .writeJsonFileAtomically(
                     FileNames.crcFile(logPath, commitAsVersion),
                     toCloseableIterator(
-                        Arrays.asList(getBaseSnapshotState().build().toCrcRow()).iterator()),
+                        Arrays.asList(baseSnapshotState.build().toCrcRow()).iterator()),
                     false /* overwrite */);
             return null;
           },

@@ -13,32 +13,38 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package io.delta.kernel;
 
-import io.delta.kernel.engine.Engine;
-import io.delta.kernel.internal.actions.AddFile;
-import io.delta.kernel.internal.actions.Metadata;
-import io.delta.kernel.internal.actions.Protocol;
+package io.delta.kernel.utils;
+
 import java.io.IOException;
+import java.util.function.Function;
 
-public class LoggingTransactionStatCollector implements TransactionStatCollector {
-  @Override
-  public void recordAddedFile(AddFile addFile) {
-    System.out.println(addFile);
+public class InterceptCloseableIterator<T> implements CloseableIterator<T> {
+
+  private CloseableIterator<T> delegate;
+
+  private Function<T, Void> interceptFunc;
+
+  public InterceptCloseableIterator(
+      CloseableIterator<T> delegate, Function<T, Void> interceptFunc) {
+    this.delegate = delegate;
+    this.interceptFunc = interceptFunc;
   }
 
   @Override
-  public void recordMetadata(Metadata metadata) {
-    System.out.println(metadata);
+  public boolean hasNext() {
+    return delegate.hasNext();
   }
 
   @Override
-  public void recordProtocol(Protocol protocol) {
-    System.out.println(protocol);
+  public T next() {
+    T next = delegate.next();
+    interceptFunc.apply(next);
+    return next;
   }
 
   @Override
-  public void onCommitSucceeds(Engine engine, long commitAsVersion) throws IOException {
-    System.out.println("on commit succeeds");
+  public void close() throws IOException {
+    delegate.close();
   }
 }
