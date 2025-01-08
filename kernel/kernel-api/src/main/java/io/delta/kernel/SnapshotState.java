@@ -40,6 +40,7 @@ public class SnapshotState {
   private final long tableSizeBytes;
   private final long numFiles;
 
+  // TODO: consolidate the data structure in the private branch
   public SnapshotState(Metadata metadata, Protocol protocol, long tableSizeBytes, long numFiles) {
     this.metadata = metadata;
     this.protocol = protocol;

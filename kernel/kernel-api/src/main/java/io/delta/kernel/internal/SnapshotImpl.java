@@ -173,6 +173,7 @@ public class SnapshotImpl implements Snapshot {
 
   public SnapshotState getSnapshotState(Engine engine) {
     SnapshotStateBuilder builder = new SnapshotStateBuilder(getMetadata(), getProtocol());
+    // TODO: implement reading from current checkpoint if it exists.
     CloseableIterator<FilteredColumnarBatch> addedFilesIter =
         logReplay.getAddFilesAsColumnarBatches(engine, true, Optional.empty());
     while (addedFilesIter.hasNext()) {
