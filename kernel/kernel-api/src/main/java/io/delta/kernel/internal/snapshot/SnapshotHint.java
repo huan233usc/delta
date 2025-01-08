@@ -82,8 +82,8 @@ public class SnapshotHint {
   // Hack, to be moved to utils
   public Row toCrcRow(String tnxId) {
     Map<Integer, Object> value = new HashMap<>();
-    value.put(CRC_FILE_SCHEMA.indexOf("tableSizeBytes"), tableSizeBytes);
-    value.put(CRC_FILE_SCHEMA.indexOf("numFiles"), numFiles);
+    value.put(CRC_FILE_SCHEMA.indexOf("tableSizeBytes"), tableSizeBytes.getAsLong());
+    value.put(CRC_FILE_SCHEMA.indexOf("numFiles"), numFiles.getAsLong());
     value.put(CRC_FILE_SCHEMA.indexOf("numMetadata"), 1L);
     value.put(CRC_FILE_SCHEMA.indexOf("numProtocol"), 1L);
     value.put(CRC_FILE_SCHEMA.indexOf("metadata"), metadata.toRow());

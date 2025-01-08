@@ -285,7 +285,6 @@ public class TransactionImpl implements Transaction {
           "Write file actions to JSON log file `%s`",
           FileNames.deltaFile(logPath, commitAsVersion));
 
-
       // readSnapshot.getFullSnapshotHint(engine) and beyond might be done out side tnx.
       SnapshotHint preCommitSnapshotState =
           readSnapshot.getNumFiles().isPresent()
