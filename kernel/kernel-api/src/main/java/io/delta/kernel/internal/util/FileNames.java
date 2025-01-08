@@ -42,6 +42,8 @@ public final class FileNames {
   private static final Pattern MULTI_PART_CHECKPOINT_FILE_PATTERN =
       Pattern.compile("(\\d+)\\.checkpoint\\.\\d+\\.\\d+\\.parquet");
 
+  private static final Pattern checksumFileRegex = Pattern.compile("(\\d+)\\.crc");
+
   public static final String SIDECAR_DIRECTORY = "_sidecars";
 
   /** Returns the delta (json format) path for a given delta file. */
@@ -49,8 +51,12 @@ public final class FileNames {
     return String.format("%s/%020d.json", path, version);
   }
 
-  public static String crcFile(Path path, long version) {
+  public static String checksumFile(Path path, long version) {
     return String.format("%s/%020d.crc", path, version);
+  }
+
+  public static long checksumVersion(Path path) {
+    return Long.parseLong(path.getName().split("\\.")[0]);
   }
 
   /** Returns the version for the given delta path. */
@@ -152,6 +158,10 @@ public final class FileNames {
     String filename = new Path(fileName).getName();
     return DELTA_FILE_PATTERN.matcher(filename).matches()
         || UUID_DELTA_FILE_REGEX.matcher(filename).matches();
+  }
+
+  public static boolean isChecksumFile(Path checksumFilePath) {
+    return checksumFileRegex.matcher(checksumFilePath.getName()).matches();
   }
 
   /**

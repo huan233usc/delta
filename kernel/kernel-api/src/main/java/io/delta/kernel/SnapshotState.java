@@ -20,12 +20,14 @@ import io.delta.kernel.internal.actions.Metadata;
 import io.delta.kernel.internal.actions.Protocol;
 import io.delta.kernel.internal.data.GenericRow;
 import io.delta.kernel.types.LongType;
+import io.delta.kernel.types.StringType;
 import io.delta.kernel.types.StructType;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 public class SnapshotState {
-
+  // TODO have a seperate class as some fields are not belonging to the snapshot
   public static StructType CRC_FILE_SCHEMA =
       new StructType()
           .add("tableSizeBytes", LongType.LONG)
@@ -33,7 +35,8 @@ public class SnapshotState {
           .add("numMetadata", LongType.LONG)
           .add("numProtocol", LongType.LONG)
           .add("metadata", Metadata.FULL_SCHEMA)
-          .add("protocol", Protocol.FULL_SCHEMA);
+          .add("protocol", Protocol.FULL_SCHEMA)
+          .add("txnId", StringType.STRING);
 
   private final Metadata metadata;
   private final Protocol protocol;
@@ -64,7 +67,7 @@ public class SnapshotState {
     return protocol;
   }
 
-  public Row toCrcRow() {
+  public Row toCrcRow(Optional<String> tnxId) {
     Map<Integer, Object> value = new HashMap<>();
     value.put(CRC_FILE_SCHEMA.indexOf("tableSizeBytes"), tableSizeBytes);
     value.put(CRC_FILE_SCHEMA.indexOf("numFiles"), numFiles);
@@ -72,6 +75,7 @@ public class SnapshotState {
     value.put(CRC_FILE_SCHEMA.indexOf("numProtocol"), 1L);
     value.put(CRC_FILE_SCHEMA.indexOf("metadata"), metadata.toRow());
     value.put(CRC_FILE_SCHEMA.indexOf("protocol"), protocol.toRow());
+    tnxId.ifPresent(id -> value.put(CRC_FILE_SCHEMA.indexOf("txnId"), id));
     return new GenericRow(CRC_FILE_SCHEMA, value);
   }
 }

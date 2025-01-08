@@ -292,14 +292,16 @@ public class TransactionImpl implements Transaction {
             engine
                 .getJsonHandler()
                 .writeJsonFileAtomically(
-                    FileNames.crcFile(logPath, commitAsVersion),
+                    FileNames.checksumFile(logPath, commitAsVersion),
                     toCloseableIterator(
-                        Arrays.asList(baseSnapshotState.build().toCrcRow()).iterator()),
+                        Arrays.asList(
+                                baseSnapshotState.build().toCrcRow(Optional.of(txnId.toString())))
+                            .iterator()),
                     false /* overwrite */);
             return null;
           },
           "Write file actions to JSON log file `%s`",
-          FileNames.crcFile(logPath, commitAsVersion));
+          FileNames.checksumFile(logPath, commitAsVersion));
       return new TransactionCommitResult(commitAsVersion, isReadyForCheckpoint(commitAsVersion));
     } catch (FileAlreadyExistsException e) {
       throw e;

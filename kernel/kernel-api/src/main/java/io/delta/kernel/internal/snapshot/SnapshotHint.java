@@ -25,6 +25,7 @@ public class SnapshotHint {
   private final Protocol protocol;
   private final Metadata metadata;
 
+
   public SnapshotHint(long version, Protocol protocol, Metadata metadata) {
     this.version = version;
     this.protocol = protocol;
@@ -42,4 +43,6 @@ public class SnapshotHint {
   public Metadata getMetadata() {
     return metadata;
   }
+
+
 }
