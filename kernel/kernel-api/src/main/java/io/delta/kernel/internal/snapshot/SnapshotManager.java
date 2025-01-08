@@ -37,8 +37,10 @@ import io.delta.kernel.internal.actions.Metadata;
 import io.delta.kernel.internal.checkpoints.*;
 import io.delta.kernel.internal.fs.Path;
 import io.delta.kernel.internal.lang.ListUtils;
+import io.delta.kernel.internal.replay.ChecksumReader;
 import io.delta.kernel.internal.replay.CreateCheckpointIterator;
 import io.delta.kernel.internal.replay.LogReplay;
+import io.delta.kernel.internal.replay.VersionStats;
 import io.delta.kernel.internal.util.Clock;
 import io.delta.kernel.internal.util.FileNames;
 import io.delta.kernel.internal.util.Tuple2;
@@ -392,14 +394,28 @@ public class SnapshotManager {
 
     long startTimeMillis = System.currentTimeMillis();
 
+    Optional<SnapshotHint> lastSnapshotHint = Optional.ofNullable(latestSnapshotHint.get());
+    if (!lastSnapshotHint.isPresent()) {
+      // TODO see if we want to find previous ones
+      Optional<VersionStats> versionStatsOpt =
+          ChecksumReader.getVersionStats(
+              engine, initSegment.logPath, initSegment.version, Optional.empty());
+      if (versionStatsOpt.isPresent()) {
+        VersionStats stats = versionStatsOpt.get();
+        lastSnapshotHint =
+            Optional.of(
+                new SnapshotHint(
+                    stats.getVersion(),
+                    stats.getProtocol(),
+                    stats.getMetadata(),
+                    OptionalLong.of(stats.getTableSizeBytes()),
+                    OptionalLong.of(stats.getNumFiles())));
+      }
+    }
+
     LogReplay logReplay =
         new LogReplay(
-            logPath,
-            tablePath,
-            initSegment.version,
-            engine,
-            initSegment,
-            Optional.ofNullable(latestSnapshotHint.get()));
+            logPath, tablePath, initSegment.version, engine, initSegment, lastSnapshotHint);
 
     assertLogFilesBelongToTable(logPath, initSegment.allLogFilesUnsorted());
 
@@ -416,7 +432,11 @@ public class SnapshotManager {
 
     final SnapshotHint hint =
         new SnapshotHint(
-            snapshot.getVersion(engine), snapshot.getProtocol(), snapshot.getMetadata());
+            snapshot.getVersion(engine),
+            snapshot.getProtocol(),
+            snapshot.getMetadata(),
+            snapshot.getTableSizeBytes(),
+            snapshot.getNumFiles());
 
     registerHint(hint);
 

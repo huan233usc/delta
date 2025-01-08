@@ -16,20 +16,36 @@
 
 package io.delta.kernel.internal.snapshot;
 
+import io.delta.kernel.data.Row;
 import io.delta.kernel.internal.actions.Metadata;
 import io.delta.kernel.internal.actions.Protocol;
+import io.delta.kernel.internal.data.GenericRow;
+import io.delta.kernel.types.LongType;
+import io.delta.kernel.types.StringType;
+import io.delta.kernel.types.StructType;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.OptionalLong;
 
 /** Contains summary information of a {@link io.delta.kernel.Snapshot}. */
 public class SnapshotHint {
   private final long version;
   private final Protocol protocol;
   private final Metadata metadata;
+  private final OptionalLong tableSizeBytes;
+  private final OptionalLong numFiles;
 
-
-  public SnapshotHint(long version, Protocol protocol, Metadata metadata) {
+  public SnapshotHint(
+      long version,
+      Protocol protocol,
+      Metadata metadata,
+      OptionalLong tableSizeBytes,
+      OptionalLong numFiles) {
     this.version = version;
     this.protocol = protocol;
     this.metadata = metadata;
+    this.tableSizeBytes = tableSizeBytes;
+    this.numFiles = numFiles;
   }
 
   public long getVersion() {
@@ -44,5 +60,35 @@ public class SnapshotHint {
     return metadata;
   }
 
+  public OptionalLong getTableSizeBytes() {
+    return tableSizeBytes;
+  }
 
+  public OptionalLong getNumFiles() {
+    return numFiles;
+  }
+
+  // HACK
+  public static StructType CRC_FILE_SCHEMA =
+      new StructType()
+          .add("tableSizeBytes", LongType.LONG)
+          .add("numFiles", LongType.LONG)
+          .add("numMetadata", LongType.LONG)
+          .add("numProtocol", LongType.LONG)
+          .add("metadata", Metadata.FULL_SCHEMA)
+          .add("protocol", Protocol.FULL_SCHEMA)
+          .add("txnId", StringType.STRING);
+
+  // Hack, to be moved to utils
+  public Row toCrcRow(String tnxId) {
+    Map<Integer, Object> value = new HashMap<>();
+    value.put(CRC_FILE_SCHEMA.indexOf("tableSizeBytes"), tableSizeBytes);
+    value.put(CRC_FILE_SCHEMA.indexOf("numFiles"), numFiles);
+    value.put(CRC_FILE_SCHEMA.indexOf("numMetadata"), 1L);
+    value.put(CRC_FILE_SCHEMA.indexOf("numProtocol"), 1L);
+    value.put(CRC_FILE_SCHEMA.indexOf("metadata"), metadata.toRow());
+    value.put(CRC_FILE_SCHEMA.indexOf("protocol"), protocol.toRow());
+    value.put(CRC_FILE_SCHEMA.indexOf("txnId"), tnxId);
+    return new GenericRow(CRC_FILE_SCHEMA, value);
+  }
 }

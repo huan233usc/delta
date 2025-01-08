@@ -17,6 +17,8 @@ package io.delta.kernel;
 
 import io.delta.kernel.annotation.Evolving;
 import io.delta.kernel.engine.Engine;
+import io.delta.kernel.internal.TransactionCommitSummary;
+import io.delta.kernel.internal.snapshot.SnapshotHint;
 import io.delta.kernel.utils.CloseableIterable;
 
 /**
@@ -29,10 +31,18 @@ import io.delta.kernel.utils.CloseableIterable;
 public class TransactionCommitResult {
   private final long version;
   private final boolean isReadyForCheckpoint;
+  private final SnapshotHint preCommitSnapshotState;
+  private final TransactionCommitSummary summary;
 
-  public TransactionCommitResult(long version, boolean isReadyForCheckpoint) {
+  public TransactionCommitResult(
+      long version,
+      boolean isReadyForCheckpoint,
+      SnapshotHint preCommitSnapshotState,
+      TransactionCommitSummary summary) {
     this.version = version;
     this.isReadyForCheckpoint = isReadyForCheckpoint;
+    this.preCommitSnapshotState = preCommitSnapshotState;
+    this.summary = summary;
   }
 
   /**
@@ -53,5 +63,9 @@ public class TransactionCommitResult {
    */
   public boolean isReadyForCheckpoint() {
     return isReadyForCheckpoint;
+  }
+
+  public TransactionCommitSummary getSummary() {
+    return summary;
   }
 }

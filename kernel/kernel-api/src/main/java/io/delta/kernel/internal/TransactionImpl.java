@@ -32,6 +32,7 @@ import io.delta.kernel.internal.data.TransactionStateRow;
 import io.delta.kernel.internal.fs.Path;
 import io.delta.kernel.internal.replay.ConflictChecker;
 import io.delta.kernel.internal.replay.ConflictChecker.TransactionRebaseState;
+import io.delta.kernel.internal.snapshot.SnapshotHint;
 import io.delta.kernel.internal.util.*;
 import io.delta.kernel.types.StructType;
 import io.delta.kernel.utils.CloseableIterable;
@@ -74,8 +75,6 @@ public class TransactionImpl implements Transaction {
   private Metadata metadata;
   private boolean shouldUpdateMetadata;
 
-  private SnapshotStateBuilder baseSnapshotState;
-
   private boolean closed; // To avoid trying to commit the same transaction again.
 
   public TransactionImpl(
@@ -90,8 +89,7 @@ public class TransactionImpl implements Transaction {
       Optional<SetTransaction> setTxnOpt,
       boolean shouldUpdateMetadata,
       boolean shouldUpdateProtocol,
-      Clock clock,
-      SnapshotState baseSnapshotState) {
+      Clock clock) {
     this.isNewTable = isNewTable;
     this.dataPath = dataPath;
     this.logPath = logPath;
@@ -104,7 +102,6 @@ public class TransactionImpl implements Transaction {
     this.shouldUpdateMetadata = shouldUpdateMetadata;
     this.shouldUpdateProtocol = shouldUpdateProtocol;
     this.clock = clock;
-    this.baseSnapshotState = new SnapshotStateBuilder(baseSnapshotState);
   }
 
   @Override
@@ -224,6 +221,7 @@ public class TransactionImpl implements Transaction {
       CommitInfo attemptCommitInfo,
       CloseableIterable<Row> dataActions)
       throws FileAlreadyExistsException {
+    TransactionCommitSummary summary = new TransactionCommitSummary();
     List<Row> metadataActions = new ArrayList<>();
     metadataActions.add(createCommitInfoSingleAction(attemptCommitInfo.toRow()));
     if (shouldUpdateMetadata || isNewTable) {
@@ -233,12 +231,12 @@ public class TransactionImpl implements Transaction {
               ColumnMapping.getColumnMappingMode(metadata.getConfiguration()),
               isNewTable);
       metadataActions.add(createMetadataSingleAction(metadata.toRow()));
-      baseSnapshotState.setMetadata(this.metadata);
+      summary.setUpdatedMetadata(this.metadata);
     }
     if (shouldUpdateProtocol || isNewTable) {
       // In the future, we need to add metadata and action when there are any changes to them.
       metadataActions.add(createProtocolSingleAction(protocol.toRow()));
-      baseSnapshotState.setProtocol(this.protocol);
+      summary.setUpdatedProtocol(this.protocol);
     }
     setTxnOpt.ifPresent(setTxn -> metadataActions.add(createTxnSingleAction(setTxn.toRow())));
     // Check for duplicate domain metadata and if the protocol supports
@@ -268,7 +266,7 @@ public class TransactionImpl implements Transaction {
               dataAndMetadataActions,
               r -> {
                 if (!r.isNullAt(ADD_FILE_ORDINAL)) {
-                  baseSnapshotState.addFile(new AddFile(r.getStruct(ADD_FILE_ORDINAL)));
+                  summary.onAddFile(new AddFile(r.getStruct(ADD_FILE_ORDINAL)));
                 }
                 return null;
               });
@@ -287,22 +285,42 @@ public class TransactionImpl implements Transaction {
           "Write file actions to JSON log file `%s`",
           FileNames.deltaFile(logPath, commitAsVersion));
 
+
+      // readSnapshot.getFullSnapshotHint(engine) and beyond might be done out side tnx.
+      SnapshotHint preCommitSnapshotState =
+          readSnapshot.getNumFiles().isPresent()
+              ? new SnapshotHint(
+                  readSnapshot.getVersion(engine),
+                  readSnapshot.getProtocol(),
+                  readSnapshot.getMetadata(),
+                  readSnapshot.getTableSizeBytes(),
+                  readSnapshot.getNumFiles())
+              : readSnapshot.getFullSnapshotHint(engine);
+
+      SnapshotHint postCommitSnapshotState =
+          new SnapshotHint(
+              preCommitSnapshotState.getVersion(),
+              preCommitSnapshotState.getProtocol(),
+              preCommitSnapshotState.getMetadata(),
+              preCommitSnapshotState.getTableSizeBytes(),
+              preCommitSnapshotState.getNumFiles());
+
       wrapEngineExceptionThrowsIO(
           () -> {
             engine
                 .getJsonHandler()
                 .writeJsonFileAtomically(
-                    FileNames.checksumFile(logPath, commitAsVersion),
+                    FileNames.checksumFile(logPath, commitAsVersion).toString(),
                     toCloseableIterator(
-                        Arrays.asList(
-                                baseSnapshotState.build().toCrcRow(Optional.of(txnId.toString())))
+                        Arrays.asList(postCommitSnapshotState.toCrcRow(txnId.toString()))
                             .iterator()),
                     false /* overwrite */);
             return null;
           },
           "Write file actions to JSON log file `%s`",
           FileNames.checksumFile(logPath, commitAsVersion));
-      return new TransactionCommitResult(commitAsVersion, isReadyForCheckpoint(commitAsVersion));
+      return new TransactionCommitResult(
+          commitAsVersion, isReadyForCheckpoint(commitAsVersion), preCommitSnapshotState, summary);
     } catch (FileAlreadyExistsException e) {
       throw e;
     } catch (IOException ioe) {

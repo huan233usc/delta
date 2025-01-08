@@ -51,8 +51,9 @@ public final class FileNames {
     return String.format("%s/%020d.json", path, version);
   }
 
-  public static String checksumFile(Path path, long version) {
-    return String.format("%s/%020d.crc", path, version);
+  /** Returns the path to the checksum file for the given version. */
+  public static Path checksumFile(Path path, long version) {
+    return new Path(path, String.format("%020d.crc", version));
   }
 
   public static long checksumVersion(Path path) {

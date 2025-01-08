@@ -40,6 +40,7 @@ import java.io.UncheckedIOException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 
 /**
  * Replays a history of actions, resolving them to produce the current state of the table. The
@@ -119,6 +120,8 @@ public class LogReplay {
   private final LogSegment logSegment;
   private final Tuple2<Protocol, Metadata> protocolAndMetadata;
   private final Lazy<Map<String, DomainMetadata>> domainMetadataMap;
+  private final OptionalLong tableSizeBytes;
+  private final OptionalLong numFiles;
 
   public LogReplay(
       Path logPath,
@@ -134,6 +137,10 @@ public class LogReplay {
     this.protocolAndMetadata = loadTableProtocolAndMetadata(engine, snapshotHint, snapshotVersion);
     // Lazy loading of domain metadata only when needed
     this.domainMetadataMap = new Lazy<>(() -> loadDomainMetadataMap(engine));
+    this.tableSizeBytes =
+        snapshotHint.isPresent() ? snapshotHint.get().getTableSizeBytes() : OptionalLong.empty();
+    this.numFiles =
+        snapshotHint.isPresent() ? snapshotHint.get().getNumFiles() : OptionalLong.empty();
   }
 
   /////////////////
@@ -146,6 +153,14 @@ public class LogReplay {
 
   public Metadata getMetadata() {
     return this.protocolAndMetadata._2;
+  }
+
+  public OptionalLong getTableSizeBytes() {
+    return this.tableSizeBytes;
+  }
+
+  public OptionalLong getNumFiles() {
+    return this.numFiles;
   }
 
   public Optional<Long> getLatestTransactionIdentifier(Engine engine, String applicationId) {

@@ -156,8 +156,7 @@ public class TransactionBuilderImpl implements TransactionBuilder {
         setTxnOpt,
         shouldUpdateMetadata,
         shouldUpdateProtocol,
-        table.getClock(),
-        snapshot.getSnapshotState(engine));
+        table.getClock());
   }
 
   /** Validate the given parameters for the transaction. */

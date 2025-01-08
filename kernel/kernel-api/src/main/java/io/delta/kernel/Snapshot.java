@@ -18,6 +18,7 @@ package io.delta.kernel;
 
 import io.delta.kernel.annotation.Evolving;
 import io.delta.kernel.engine.Engine;
+import io.delta.kernel.internal.snapshot.SnapshotHint;
 import io.delta.kernel.types.StructType;
 import java.util.List;
 
@@ -72,5 +73,5 @@ public interface Snapshot {
    */
   ScanBuilder getScanBuilder(Engine engine);
 
-  SnapshotState getSnapshotState(Engine engine);
+  SnapshotHint getFullSnapshotHint(Engine engine);
 }

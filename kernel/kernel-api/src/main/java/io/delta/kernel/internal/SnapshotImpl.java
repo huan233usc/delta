@@ -20,8 +20,6 @@ import static io.delta.kernel.internal.TableConfig.TOMBSTONE_RETENTION;
 
 import io.delta.kernel.ScanBuilder;
 import io.delta.kernel.Snapshot;
-import io.delta.kernel.SnapshotState;
-import io.delta.kernel.SnapshotStateBuilder;
 import io.delta.kernel.data.FilteredColumnarBatch;
 import io.delta.kernel.data.Row;
 import io.delta.kernel.engine.Engine;
@@ -30,12 +28,14 @@ import io.delta.kernel.internal.fs.Path;
 import io.delta.kernel.internal.replay.CreateCheckpointIterator;
 import io.delta.kernel.internal.replay.LogReplay;
 import io.delta.kernel.internal.snapshot.LogSegment;
+import io.delta.kernel.internal.snapshot.SnapshotHint;
 import io.delta.kernel.internal.util.VectorUtils;
 import io.delta.kernel.types.StructType;
 import io.delta.kernel.utils.CloseableIterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 
 /** Implementation of {@link Snapshot}. */
 public class SnapshotImpl implements Snapshot {
@@ -151,6 +151,14 @@ public class SnapshotImpl implements Snapshot {
     return logSegment;
   }
 
+  public OptionalLong getTableSizeBytes() {
+    return logReplay.getTableSizeBytes();
+  }
+
+  public OptionalLong getNumFiles() {
+    return logReplay.getNumFiles();
+  }
+
   public CreateCheckpointIterator getCreateCheckpointIterator(Engine engine) {
     long minFileRetentionTimestampMillis =
         System.currentTimeMillis() - TOMBSTONE_RETENTION.fromMetadata(metadata);
@@ -171,9 +179,10 @@ public class SnapshotImpl implements Snapshot {
     return logReplay.getLatestTransactionIdentifier(engine, applicationId);
   }
 
-  public SnapshotState getSnapshotState(Engine engine) {
-    SnapshotStateBuilder builder = new SnapshotStateBuilder(getMetadata(), getProtocol());
+  public SnapshotHint getFullSnapshotHint(Engine engine) {
     // TODO: implement reading from current checkpoint if it exists.
+    long numFiles = 0;
+    long totalBytesSize = 0;
     CloseableIterator<FilteredColumnarBatch> addedFilesIter =
         logReplay.getAddFilesAsColumnarBatches(engine, true, Optional.empty());
     while (addedFilesIter.hasNext()) {
@@ -181,9 +190,15 @@ public class SnapshotImpl implements Snapshot {
       CloseableIterator<Row> scanFileRows = scanFilesBatch.getRows();
       while (scanFileRows.hasNext()) {
         Row scanFileRow = scanFileRows.next();
-        builder.addFile(new AddFile(InternalScanFileUtils.getAddFileEntry(scanFileRow)));
+        numFiles += 1;
+        totalBytesSize += new AddFile(InternalScanFileUtils.getAddFileEntry(scanFileRow)).getSize();
       }
     }
-    return builder.build();
+    return new SnapshotHint(
+        version,
+        getProtocol(),
+        getMetadata(),
+        OptionalLong.of(totalBytesSize),
+        OptionalLong.of(numFiles));
   }
 }
