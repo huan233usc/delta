@@ -110,6 +110,10 @@ public class JsonUtils {
       for (int columnOrdinal = 0; columnOrdinal < type.length(); columnOrdinal++) {
         StructField field = type.at(columnOrdinal);
         ColumnVector childVector = vector.getChild(columnOrdinal);
+        // hack for poc
+        if (childVector == null) {
+          continue;
+        }
         if (!childVector.isNullAt(rowId)) {
           gen.writeFieldName(field.getName());
           writeValue(gen, childVector, rowId, field.getDataType());

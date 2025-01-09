@@ -32,10 +32,7 @@ import io.delta.kernel.internal.snapshot.SnapshotHint;
 import io.delta.kernel.internal.util.VectorUtils;
 import io.delta.kernel.types.StructType;
 import io.delta.kernel.utils.CloseableIterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.OptionalLong;
+import java.util.*;
 
 /** Implementation of {@link Snapshot}. */
 public class SnapshotImpl implements Snapshot {
@@ -159,6 +156,10 @@ public class SnapshotImpl implements Snapshot {
     return logReplay.getNumFiles();
   }
 
+  public Optional<List<AddFile>> getCachedAddFile() {
+    return logReplay.getCachedAllFiles();
+  }
+
   public CreateCheckpointIterator getCreateCheckpointIterator(Engine engine) {
     long minFileRetentionTimestampMillis =
         System.currentTimeMillis() - TOMBSTONE_RETENTION.fromMetadata(metadata);
@@ -183,6 +184,7 @@ public class SnapshotImpl implements Snapshot {
     // TODO: implement reading from current checkpoint if it exists.
     long numFiles = 0;
     long totalBytesSize = 0;
+    List<AddFile> addFiles = new ArrayList<>();
     CloseableIterator<FilteredColumnarBatch> addedFilesIter =
         logReplay.getAddFilesAsColumnarBatches(engine, true, Optional.empty());
     while (addedFilesIter.hasNext()) {
@@ -191,7 +193,9 @@ public class SnapshotImpl implements Snapshot {
       while (scanFileRows.hasNext()) {
         Row scanFileRow = scanFileRows.next();
         numFiles += 1;
-        totalBytesSize += new AddFile(InternalScanFileUtils.getAddFileEntry(scanFileRow)).getSize();
+        AddFile addFile = new AddFile(InternalScanFileUtils.getAddFileEntry(scanFileRow));
+        totalBytesSize += addFile.getSize();
+        addFiles.addAll(addFiles);
       }
     }
     return new SnapshotHint(
@@ -199,6 +203,7 @@ public class SnapshotImpl implements Snapshot {
         getProtocol(),
         getMetadata(),
         OptionalLong.of(totalBytesSize),
-        OptionalLong.of(numFiles));
+        OptionalLong.of(numFiles),
+        Optional.of(addFiles));
   }
 }

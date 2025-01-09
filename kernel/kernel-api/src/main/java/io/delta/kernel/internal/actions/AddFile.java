@@ -20,6 +20,7 @@ import static io.delta.kernel.internal.util.PartitionUtils.serializePartitionMap
 import static io.delta.kernel.internal.util.Preconditions.checkArgument;
 import static io.delta.kernel.internal.util.VectorUtils.toJavaMap;
 
+import io.delta.kernel.data.ColumnVector;
 import io.delta.kernel.data.MapValue;
 import io.delta.kernel.data.Row;
 import io.delta.kernel.expressions.Literal;
@@ -30,10 +31,7 @@ import io.delta.kernel.types.*;
 import io.delta.kernel.utils.DataFileStatistics;
 import io.delta.kernel.utils.DataFileStatus;
 import java.net.URI;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Optional;
+import java.util.*;
 
 /** Delta log action representing an `AddFile` */
 public class AddFile extends RowBackedAction {
@@ -52,10 +50,10 @@ public class AddFile extends RowBackedAction {
           .add(
               "partitionValues",
               new MapType(StringType.STRING, StringType.STRING, true),
-              false /* nullable*/)
-          .add("size", LongType.LONG, false /* nullable*/)
-          .add("modificationTime", LongType.LONG, false /* nullable*/)
-          .add("dataChange", BooleanType.BOOLEAN, false /* nullable*/)
+              true /* nullable*/) // hack
+          .add("size", LongType.LONG, true /* nullable*/) // hack
+          .add("modificationTime", LongType.LONG, true /* nullable*/) // hack
+          .add("dataChange", BooleanType.BOOLEAN, true /* nullable*/) // hack
           .add("deletionVector", DeletionVectorDescriptor.READ_SCHEMA, true /* nullable */)
           .add(
               "tags",
@@ -259,5 +257,44 @@ public class AddFile extends RowBackedAction {
         getBaseRowId(),
         getDefaultRowCommitVersion(),
         getStats().map(DataFileStatistics::toString));
+  }
+
+  public static AddFile fromColumnVector(ColumnVector vector, int rowId) {
+    if (vector.isNullAt(rowId)) {
+      return null;
+    }
+    // Hack
+    Row addFileRow =
+        createAddFileRow(
+            vector.getChild(0).getString(rowId),
+            serializePartitionMap(new HashMap<String, Literal>()),
+            0,
+            0,
+            true,
+            Optional.empty(),
+            Optional.empty(),
+            Optional.empty(),
+            Optional.empty(),
+            Optional.empty());
+
+    //    Row addFileRow =
+    //        createAddFileRow(
+    //            vector.getChild(0).getString(rowId),
+    //            vector.getChild(1).getMap(rowId),
+    //            vector.getChild(2).getLong(rowId),
+    //            vector.getChild(3).getLong(rowId),
+    //            vector.getChild(4).getBoolean(rowId),
+    //            Optional.ofNullable(
+    //                DeletionVectorDescriptor.fromColumnVector(vector.getChild(5), rowId)),
+    //            Optional.ofNullable(vector.getChild(6).getMap(rowId)),
+    //            Optional.ofNullable(
+    //                vector.getChild(7).isNullAt(rowId) ? null :
+    // vector.getChild(7).getLong(rowId)),
+    //            Optional.ofNullable(
+    //                vector.getChild(8).isNullAt(rowId) ? null :
+    // vector.getChild(8).getLong(rowId)),
+    //            // TODO: may need to avoid serialization
+    //            DataFileStatistics.deserializeFromJson(vector.getChild(9).getString(rowId)));
+    return new AddFile(addFileRow);
   }
 }

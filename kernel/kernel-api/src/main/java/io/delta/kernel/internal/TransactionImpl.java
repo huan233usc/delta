@@ -292,9 +292,10 @@ public class TransactionImpl implements Transaction {
               readSnapshot.getProtocol(),
               readSnapshot.getMetadata(),
               readSnapshot.getTableSizeBytes(),
-              readSnapshot.getNumFiles());
+              readSnapshot.getNumFiles(),
+              readSnapshot.getCachedAddFile());
 
-      if (!readSnapshot.getNumFiles().isPresent()) {
+      if (!readSnapshot.getNumFiles().isPresent() && !isNewTable) {
         return new TransactionCommitResult(
             commitAsVersion,
             isReadyForCheckpoint(commitAsVersion),
@@ -304,15 +305,25 @@ public class TransactionImpl implements Transaction {
       }
 
       SnapshotHint postCommitSnapshotState =
-          new SnapshotHint(
-              commitAsVersion,
-              summary.getUpdatedProtocol().orElseGet(() -> preCommitSnapshotState.getProtocol()),
-              summary.getUpdatedMetadata().orElseGet(() -> preCommitSnapshotState.getMetadata()),
-              OptionalLong.of(
-                  preCommitSnapshotState.getTableSizeBytes().getAsLong()
-                      + summary.getAddedTableSize()),
-              OptionalLong.of(
-                  preCommitSnapshotState.getNumFiles().getAsLong() + summary.getAddedFileCounts()));
+          isNewTable
+              ? new SnapshotHint(
+                  commitAsVersion,
+                  summary.getUpdatedProtocol().get(),
+                  summary.getUpdatedMetadata().get(),
+                  OptionalLong.of(summary.getAddedTableSize()),
+                  OptionalLong.of(summary.getAddedFileCounts()),
+                  Optional.of(summary.getAddFiles()))
+              : new SnapshotHint(
+                  commitAsVersion,
+                  summary.getUpdatedProtocol().orElse(preCommitSnapshotState.getProtocol()),
+                  summary.getUpdatedMetadata().orElse(preCommitSnapshotState.getMetadata()),
+                  OptionalLong.of(
+                      preCommitSnapshotState.getTableSizeBytes().getAsLong()
+                          + summary.getAddedTableSize()),
+                  OptionalLong.of(
+                      preCommitSnapshotState.getNumFiles().getAsLong()
+                          + summary.getAddedFileCounts()),
+                  constructNewAddFiles(readSnapshot, summary.getAddFiles()));
 
       wrapEngineExceptionThrowsIO(
           () -> {
@@ -397,5 +408,16 @@ public class TransactionImpl implements Transaction {
   public static List<Column> getStatisticsColumns(Engine engine, Row transactionState) {
     // TODO: implement this once we start supporting collecting stats
     return Collections.emptyList();
+  }
+
+  static Optional<List<AddFile>> constructNewAddFiles(
+      SnapshotImpl readSnapshot, List<AddFile> addFiles) {
+    if (!readSnapshot.getCachedAddFile().isPresent()) {
+      return Optional.empty();
+    }
+    List<AddFile> newFiles = new ArrayList<>();
+    newFiles.addAll(readSnapshot.getCachedAddFile().get());
+    newFiles.addAll(addFiles);
+    return Optional.of(newFiles);
   }
 }

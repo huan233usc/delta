@@ -37,10 +37,7 @@ import io.delta.kernel.types.StructType;
 import io.delta.kernel.utils.CloseableIterator;
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Optional;
-import java.util.OptionalLong;
+import java.util.*;
 
 /**
  * Replays a history of actions, resolving them to produce the current state of the table. The
@@ -122,6 +119,7 @@ public class LogReplay {
   private final Lazy<Map<String, DomainMetadata>> domainMetadataMap;
   private final OptionalLong tableSizeBytes;
   private final OptionalLong numFiles;
+  private final Optional<List<AddFile>> cachedAllFiles;
 
   public LogReplay(
       Path logPath,
@@ -141,6 +139,8 @@ public class LogReplay {
         snapshotHint.isPresent() ? snapshotHint.get().getTableSizeBytes() : OptionalLong.empty();
     this.numFiles =
         snapshotHint.isPresent() ? snapshotHint.get().getNumFiles() : OptionalLong.empty();
+    this.cachedAllFiles =
+        snapshotHint.isPresent() ? snapshotHint.get().getAllFiles() : Optional.empty();
   }
 
   /////////////////
@@ -161,6 +161,10 @@ public class LogReplay {
 
   public OptionalLong getNumFiles() {
     return this.numFiles;
+  }
+
+  public Optional<List<AddFile>> getCachedAllFiles() {
+    return cachedAllFiles;
   }
 
   public Optional<Long> getLatestTransactionIdentifier(Engine engine, String applicationId) {

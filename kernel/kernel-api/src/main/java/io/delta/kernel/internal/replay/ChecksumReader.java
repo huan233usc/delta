@@ -50,6 +50,7 @@ public class ChecksumReader {
     // First try to load the CRC at given version. If not found or failed to read then try to
     // find the latest CRC file that is created after the lower bound version or within the
     // last 100 versions.
+    System.out.println(readVersion);
     Path crcFilePath = checksumFile(logPath, readVersion);
     Optional<VersionStats> versionStatsOpt = readChecksumFile(engine, crcFilePath);
     if (versionStatsOpt.isPresent()
@@ -109,7 +110,7 @@ public class ChecksumReader {
       return Optional.of(versionStats);
     } catch (Exception e) {
       // This can happen when the version does not have a checksum file
-      logger.warn("Failed to read checksum file {}", filePath, e);
+      System.out.println(String.format("Failed to read checksum file %s %s", filePath, e));
       return Optional.empty();
     }
   }

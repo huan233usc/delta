@@ -390,16 +390,21 @@ public class SnapshotManager {
             .checkpointVersionOpt
             .map(v -> format("starting from checkpoint version %s.", v))
             .orElse(".");
-    logger.info("{}: Loading version {} {}", tablePath, initSegment.version, startingFromStr);
+    System.out.println(
+        String.format(
+            "%s: Loading version %s %s", tablePath, initSegment.version, startingFromStr));
 
     long startTimeMillis = System.currentTimeMillis();
 
     Optional<SnapshotHint> lastSnapshotHint = Optional.ofNullable(latestSnapshotHint.get());
-    if (!lastSnapshotHint.isPresent()) {
+    // Time travel read need to rebuild.
+    if (!lastSnapshotHint.isPresent()
+        || lastSnapshotHint.get().getVersion() != initSegment.version) {
       // TODO see if we want to find previous ones
       Optional<VersionStats> versionStatsOpt =
           ChecksumReader.getVersionStats(
               engine, initSegment.logPath, initSegment.version, Optional.empty());
+      System.out.println(versionStatsOpt);
       if (versionStatsOpt.isPresent()) {
         VersionStats stats = versionStatsOpt.get();
         lastSnapshotHint =
@@ -409,7 +414,8 @@ public class SnapshotManager {
                     stats.getProtocol(),
                     stats.getMetadata(),
                     OptionalLong.of(stats.getTableSizeBytes()),
-                    OptionalLong.of(stats.getNumFiles())));
+                    OptionalLong.of(stats.getNumFiles()),
+                    stats.getCacheAddFiles()));
       }
     }
 
@@ -436,7 +442,8 @@ public class SnapshotManager {
             snapshot.getProtocol(),
             snapshot.getMetadata(),
             snapshot.getTableSizeBytes(),
-            snapshot.getNumFiles());
+            snapshot.getNumFiles(),
+            snapshot.getCachedAddFile());
 
     registerHint(hint);
 

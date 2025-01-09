@@ -15,11 +15,17 @@
  */
 package io.delta.kernel.internal.replay;
 
+import io.delta.kernel.data.ColumnVector;
 import io.delta.kernel.data.ColumnarBatch;
+import io.delta.kernel.internal.actions.AddFile;
 import io.delta.kernel.internal.actions.Metadata;
 import io.delta.kernel.internal.actions.Protocol;
+import io.delta.kernel.types.ArrayType;
 import io.delta.kernel.types.LongType;
 import io.delta.kernel.types.StructType;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
 
 public class VersionStats {
   public static VersionStats fromColumnarBatch(long version, ColumnarBatch batch, int rowId) {
@@ -28,7 +34,17 @@ public class VersionStats {
     Metadata metadata = Metadata.fromColumnVector(batch.getColumnVector(METADATA_ORDINAL), rowId);
     long tableSizeBytes = batch.getColumnVector(TABLE_SIZE_BYTES_ORDINAL).getLong(rowId);
     long numFiles = batch.getColumnVector(NUM_FILES_ORDINAL).getLong(rowId);
-    return new VersionStats(version, metadata, protocol, tableSizeBytes, numFiles);
+    if (batch.getColumnVector(ALL_FILES_ORDINAL).isNullAt(rowId)) {
+      return new VersionStats(
+          version, metadata, protocol, tableSizeBytes, numFiles, Optional.empty());
+    }
+    ColumnVector files = batch.getColumnVector(ALL_FILES_ORDINAL).getArray(rowId).getElements();
+    List<AddFile> allFiles = new ArrayList<>();
+    for (int i = 0; i < files.getSize(); ++i) {
+      allFiles.add(AddFile.fromColumnVector(files, i));
+    }
+    return new VersionStats(
+        version, metadata, protocol, tableSizeBytes, numFiles, Optional.of(allFiles));
   }
   // We can add additional fields later
   public static final StructType FULL_SCHEMA =
@@ -36,24 +52,33 @@ public class VersionStats {
           .add("protocol", Protocol.FULL_SCHEMA)
           .add("metadata", Metadata.FULL_SCHEMA)
           .add("tableSizeBytes", LongType.LONG)
-          .add("numFiles", LongType.LONG);
+          .add("numFiles", LongType.LONG)
+          .add("allFiles", new ArrayType(AddFile.FULL_SCHEMA, false));
   private static final int PROTOCOL_ORDINAL = 0;
   private static final int METADATA_ORDINAL = 1;
   private static final int TABLE_SIZE_BYTES_ORDINAL = 2;
   private static final int NUM_FILES_ORDINAL = 3;
+  private static final int ALL_FILES_ORDINAL = 4;
   private final long version;
   private final Metadata metadata;
   private final Protocol protocol;
   private final long tableSizeBytes;
   private final long numFiles;
+  private final Optional<List<AddFile>> cachedAddedFiles;
 
   protected VersionStats(
-      long version, Metadata metadata, Protocol protocol, long tableSizeBytes, long numFiles) {
+      long version,
+      Metadata metadata,
+      Protocol protocol,
+      long tableSizeBytes,
+      long numFiles,
+      Optional<List<AddFile>> cachedAddedFiles) {
     this.version = version;
     this.metadata = metadata;
     this.protocol = protocol;
     this.tableSizeBytes = tableSizeBytes;
     this.numFiles = numFiles;
+    this.cachedAddedFiles = cachedAddedFiles;
   }
   /** The version of the Delta table that this VersionStats represents. */
   public long getVersion() {
@@ -74,5 +99,9 @@ public class VersionStats {
 
   public long getNumFiles() {
     return numFiles;
+  }
+
+  public Optional<List<AddFile>> getCacheAddFiles() {
+    return cachedAddedFiles;
   }
 }

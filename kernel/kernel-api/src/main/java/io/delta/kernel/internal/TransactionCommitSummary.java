@@ -18,6 +18,8 @@ package io.delta.kernel.internal;
 import io.delta.kernel.internal.actions.AddFile;
 import io.delta.kernel.internal.actions.Metadata;
 import io.delta.kernel.internal.actions.Protocol;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 public class TransactionCommitSummary {
@@ -25,10 +27,12 @@ public class TransactionCommitSummary {
   private Optional<Protocol> updatedProtocol;
   private long addedTableSize;
   private long addedFileCounts;
+  private List<AddFile> addFiles;
 
   public TransactionCommitSummary() {
     updatedMetadata = Optional.empty();
     updatedProtocol = Optional.empty();
+    addFiles = new ArrayList<>();
   }
 
   public void setUpdatedMetadata(Metadata metadata) {
@@ -42,6 +46,7 @@ public class TransactionCommitSummary {
   public void onAddFile(AddFile file) {
     addedFileCounts++;
     addedTableSize += file.getSize();
+    addFiles.add(file);
   }
 
   public Optional<Metadata> getUpdatedMetadata() {
@@ -58,5 +63,9 @@ public class TransactionCommitSummary {
 
   public long getAddedFileCounts() {
     return addedFileCounts;
+  }
+
+  public List<AddFile> getAddFiles() {
+    return addFiles;
   }
 }
