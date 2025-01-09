@@ -190,6 +190,12 @@ public class LogReplay {
    */
   public CloseableIterator<FilteredColumnarBatch> getAddFilesAsColumnarBatches(
       Engine engine, boolean shouldReadStats, Optional<Predicate> checkpointPredicate) {
+    // TODO addRemoveIter = new ActionsIterator(
+    //            engine,
+    //            allCachedFiles,
+    //            getAddRemoveReadSchema(shouldReadStats),
+    //            checkpointPredicate);
+    // after successfully added deleted files
     final CloseableIterator<ActionWrapper> addRemoveIter =
         new ActionsIterator(
             engine,
