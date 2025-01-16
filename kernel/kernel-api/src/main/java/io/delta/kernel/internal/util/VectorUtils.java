@@ -197,12 +197,52 @@ public final class VectorUtils {
       }
 
       @Override
+      public boolean getBoolean(int rowId) {
+        checkArgument(BooleanType.BOOLEAN.equals(dataType));
+        checkArgument(rowId >= 0 && rowId < values.size(), "Invalid rowId: %s", rowId);
+        return (Boolean) values.get(rowId);
+      }
+
+      @Override
+      public MapValue getMap(int rowId) {
+        checkArgument(dataType instanceof MapType);
+        checkArgument(rowId >= 0 && rowId < values.size(), "Invalid rowId: %s", rowId);
+        Object value = values.get(rowId);
+        return (MapValue) values.get(rowId);
+      }
+
+      @Override
       public ColumnVector getChild(int ordinal) {
         checkArgument(dataType instanceof StructType);
         checkArgument(ordinal < ((StructType) dataType).length());
+        DataType childDatatype = ((StructType) dataType).at(ordinal).getDataType();
         return buildObjectVector(
-            values.stream().map(e -> ((Row) e).getStruct(ordinal)).collect(Collectors.toList()),
-            ((StructType) dataType).at(ordinal).getDataType());
+            values.stream()
+                .map(
+                    e -> {
+                      Row row = (Row) e;
+                      if (row.isNullAt(ordinal)) {
+                        return null;
+                      }
+                      if (StringType.STRING.equals(childDatatype)) {
+                        return row.getString(ordinal);
+                      }
+                      if (LongType.LONG.equals(childDatatype)) {
+                        return row.getLong(ordinal);
+                      }
+                      if (IntegerType.INTEGER.equals(childDatatype)) {
+                        return row.getInt(ordinal);
+                      }
+                      if (BooleanType.BOOLEAN.equals(childDatatype)) {
+                        return row.getBoolean(ordinal);
+                      }
+                      if (childDatatype instanceof MapType) {
+                        return row.getMap(ordinal);
+                      }
+                      return row.getStruct(ordinal);
+                    })
+                .collect(Collectors.toList()),
+            childDatatype);
       }
     };
   }

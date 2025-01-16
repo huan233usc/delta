@@ -24,6 +24,7 @@ import io.delta.kernel.internal.data.GenericRow;
 import io.delta.kernel.internal.util.VectorUtils;
 import io.delta.kernel.types.*;
 import java.util.*;
+import java.util.stream.Collectors;
 
 /** Contains summary information of a {@link io.delta.kernel.Snapshot}. */
 public class SnapshotHint {
@@ -100,7 +101,9 @@ public class SnapshotHint {
         af ->
             value.put(
                 CRC_FILE_SCHEMA.indexOf("allFiles"),
-                VectorUtils.buildArrayValue(af, AddFile.FULL_SCHEMA)));
+                VectorUtils.buildArrayValue(
+                    af.stream().map(AddFile::toRow).collect(Collectors.toList()),
+                    AddFile.FULL_SCHEMA)));
     return new GenericRow(CRC_FILE_SCHEMA, value);
   }
 }
