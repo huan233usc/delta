@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 public final class VectorUtils {
 
@@ -78,7 +79,7 @@ public final class VectorUtils {
    * @param values list of strings
    * @return an {@link ArrayValue} with the given values of type {@link StringType}
    */
-  public static ArrayValue stringArrayValue(List<String> values) {
+  public static ArrayValue buildArrayValue(List<?> values, DataType dataType) {
     if (values == null) {
       return null;
     }
@@ -90,7 +91,7 @@ public final class VectorUtils {
 
       @Override
       public ColumnVector getElements() {
-        return stringVector(values);
+        return buildObjectVector(values, dataType);
       }
     };
   }
@@ -117,14 +118,26 @@ public final class VectorUtils {
 
       @Override
       public ColumnVector getKeys() {
-        return stringVector(keys);
+        return buildObjectVector(keys, StringType.STRING);
       }
 
       @Override
       public ColumnVector getValues() {
-        return stringVector(values);
+        return buildObjectVector(values, StringType.STRING);
       }
     };
+  }
+
+  /**
+   * Creates an {@link ArrayValue} from list of strings. The type {@code array(string)} is a common
+   * occurrence in Delta Log schema. We don't have any non-string array type in Delta Log. If we end
+   * up needing to support other types, we can make this generic.
+   *
+   * @param values list of strings
+   * @return an {@link ArrayValue} with the given values of type {@link StringType}
+   */
+  public static ArrayValue stringArrayValue(List<String> values) {
+    return buildArrayValue(values, StringType.STRING);
   }
 
   /**
@@ -133,11 +146,11 @@ public final class VectorUtils {
    * @param values list of strings
    * @return a {@link ColumnVector} with the given values of type {@link StringType}
    */
-  public static ColumnVector stringVector(List<String> values) {
+  public static ColumnVector buildObjectVector(List<?> values, DataType dataType) {
     return new ColumnVector() {
       @Override
       public DataType getDataType() {
-        return StringType.STRING;
+        return dataType;
       }
 
       @Override
@@ -158,8 +171,38 @@ public final class VectorUtils {
 
       @Override
       public String getString(int rowId) {
+        checkArgument(StringType.STRING.equals(dataType));
         checkArgument(rowId >= 0 && rowId < values.size(), "Invalid rowId: %s", rowId);
-        return values.get(rowId);
+        Object value = values.get(rowId);
+        checkArgument(value instanceof String);
+        return (String) values.get(rowId);
+      }
+
+      @Override
+      public int getInt(int rowId) {
+        checkArgument(IntegerType.INTEGER.equals(dataType));
+        checkArgument(rowId >= 0 && rowId < values.size(), "Invalid rowId: %s", rowId);
+        Object value = values.get(rowId);
+        checkArgument(value instanceof Integer);
+        return (Integer) values.get(rowId);
+      }
+
+      @Override
+      public long getLong(int rowId) {
+        checkArgument(LongType.LONG.equals(dataType));
+        checkArgument(rowId >= 0 && rowId < values.size(), "Invalid rowId: %s", rowId);
+        Object value = values.get(rowId);
+        checkArgument(value instanceof Long);
+        return (Long) values.get(rowId);
+      }
+
+      @Override
+      public ColumnVector getChild(int ordinal) {
+        checkArgument(dataType instanceof StructType);
+        checkArgument(ordinal < ((StructType) dataType).length());
+        return buildObjectVector(
+            values.stream().map(e -> ((Row) e).getStruct(ordinal)).collect(Collectors.toList()),
+            ((StructType) dataType).at(ordinal).getDataType());
       }
     };
   }

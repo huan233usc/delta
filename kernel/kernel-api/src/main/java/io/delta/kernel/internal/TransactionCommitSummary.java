@@ -18,8 +18,6 @@ package io.delta.kernel.internal;
 import io.delta.kernel.internal.actions.AddFile;
 import io.delta.kernel.internal.actions.Metadata;
 import io.delta.kernel.internal.actions.Protocol;
-import io.delta.kernel.internal.actions.RemoveFile;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -49,12 +47,6 @@ public class TransactionCommitSummary {
     addedFileCounts++;
     addedTableSize += file.getSize();
     addFiles.add(file);
-  }
-
-  public void onRemoveFile(RemoveFile removeFile) {
-    addedFileCounts --;
-    addedTableSize -= removeFile.
-
   }
 
   public Optional<Metadata> getUpdatedMetadata() {

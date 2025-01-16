@@ -16,8 +16,6 @@
 
 package io.delta.kernel.internal.snapshot;
 
-import io.delta.kernel.data.ArrayValue;
-import io.delta.kernel.data.ColumnVector;
 import io.delta.kernel.data.Row;
 import io.delta.kernel.internal.actions.AddFile;
 import io.delta.kernel.internal.actions.Metadata;
@@ -26,7 +24,6 @@ import io.delta.kernel.internal.data.GenericRow;
 import io.delta.kernel.internal.util.VectorUtils;
 import io.delta.kernel.types.*;
 import java.util.*;
-import java.util.stream.Collectors;
 
 /** Contains summary information of a {@link io.delta.kernel.Snapshot}. */
 public class SnapshotHint {
@@ -103,46 +100,7 @@ public class SnapshotHint {
         af ->
             value.put(
                 CRC_FILE_SCHEMA.indexOf("allFiles"),
-                new ArrayValue() {
-                  @Override
-                  public int getSize() {
-                    return af.size();
-                  }
-
-                  @Override
-                  public ColumnVector getElements() {
-                    return new ColumnVector() {
-                      @Override
-                      public DataType getDataType() {
-                        return AddFile.FULL_SCHEMA;
-                      }
-
-                      @Override
-                      public int getSize() {
-                        return af.size();
-                      }
-
-                      @Override
-                      public void close() {
-                        // no-op
-                      }
-
-                      @Override
-                      public boolean isNullAt(int rowId) {
-                        return af.get(rowId) == null;
-                      }
-
-                      @Override
-                      public ColumnVector getChild(int colId) {
-                        if (colId == 0) {
-                          return VectorUtils.stringVector(
-                              af.stream().map(a -> a.getPath()).collect(Collectors.toList()));
-                        }
-                        return null;
-                      }
-                    };
-                  }
-                }));
+                VectorUtils.buildArrayValue(af, AddFile.FULL_SCHEMA)));
     return new GenericRow(CRC_FILE_SCHEMA, value);
   }
 }
