@@ -92,22 +92,55 @@ public interface CloseableIterator<T> extends Iterator<T>, Closeable {
   }
 
   default CloseableIterator<T> filter(Function<T, Boolean> mapper) {
+    return breakableFilter(
+        t -> {
+          if (mapper.apply(t)) {
+            return BreakableFilterResult.INCLUDE;
+          } else {
+            return BreakableFilterResult.EXCLUDE;
+          }
+        });
+  }
+
+  default CloseableIterator<T> takeWhile(Function<T, Boolean> mapper) {
+    return breakableFilter(
+        t -> {
+          if (mapper.apply(t)) {
+            return BreakableFilterResult.INCLUDE;
+          } else {
+            return BreakableFilterResult.BREAK;
+          }
+        });
+  }
+
+  default CloseableIterator<T> breakableFilter(Function<T, BreakableFilterResult> mapper) {
     CloseableIterator<T> delegate = this;
     return new CloseableIterator<T>() {
       T next;
       boolean hasLoadedNext;
+      boolean shouldBreak;
 
       @Override
       public boolean hasNext() {
         if (hasLoadedNext) {
           return true;
         }
+
+        if (shouldBreak) {
+          return false;
+        }
+
         while (delegate.hasNext()) {
           T potentialNext = delegate.next();
-          if (mapper.apply(potentialNext)) {
-            next = potentialNext;
-            hasLoadedNext = true;
-            return true;
+          switch (mapper.apply(potentialNext)) {
+            case INCLUDE:
+              next = potentialNext;
+              hasLoadedNext = true;
+              return true;
+            case BREAK:
+              shouldBreak = true;
+              return false;
+            case EXCLUDE:
           }
         }
         return false;
@@ -124,7 +157,7 @@ public interface CloseableIterator<T> extends Iterator<T>, Closeable {
 
       @Override
       public void close() throws IOException {
-        delegate.close();
+        this.close();
       }
     };
   }
