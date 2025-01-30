@@ -32,7 +32,8 @@ public final class ChecksumUtils {
           .add("numProtocol", LongType.LONG)
           .add("metadata", Metadata.FULL_SCHEMA)
           .add("protocol", Protocol.FULL_SCHEMA)
-          .add("txnId", StringType.STRING, /*nullable*/ true);
+          .add("txnId", StringType.STRING, /*nullable*/ true)
+          .add("fileSizeHistogram", FileSizeHistogram.FULL_SCHEMA, /*nullable*/ true);;
 
   private ChecksumUtils() {}
 }

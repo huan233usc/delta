@@ -71,6 +71,7 @@ public class TransactionCommitResult {
   }
 
   public TransactionCommitResult withCheckSum(Engine engine, ChecksumWriter checksumWriter) {
+    System.out.println(crcInfo);
     boolean checksumWritten =
         this.checkSumWritten
             || crcInfo.map(crc -> checksumWriter.writeCheckSum(engine, crc)).orElse(false);

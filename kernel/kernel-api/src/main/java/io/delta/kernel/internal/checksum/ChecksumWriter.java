@@ -24,7 +24,6 @@ import io.delta.kernel.engine.Engine;
 import io.delta.kernel.internal.data.GenericRow;
 import io.delta.kernel.internal.fs.Path;
 import io.delta.kernel.internal.util.FileNames;
-import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -63,7 +62,8 @@ public class ChecksumWriter {
           },
           "Write checksum file `%s`",
           newChecksumPath);
-    } catch (IOException io) {
+    } catch (Exception io) {
+      System.out.println(String.format("Write checksum fails with error %s", io.getMessage()));
       logger.warn("Write checksum fails with error {}", io.getMessage());
     }
     return false;
@@ -78,6 +78,9 @@ public class ChecksumWriter {
     value.put(CRC_FILE_SCHEMA.indexOf("metadata"), crcInfo.getMetadata().toRow());
     value.put(CRC_FILE_SCHEMA.indexOf("protocol"), crcInfo.getProtocol().toRow());
     crcInfo.getTxnId().ifPresent(txn -> value.put(CRC_FILE_SCHEMA.indexOf("txnId"), txn));
+    crcInfo
+        .fileSizeHistogram()
+        .ifPresent(h -> value.put(CRC_FILE_SCHEMA.indexOf("fileSizeHistogram"), h.toRow()));
     return new GenericRow(CRC_FILE_SCHEMA, value);
   }
 }

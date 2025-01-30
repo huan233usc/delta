@@ -31,6 +31,7 @@ import io.delta.kernel.internal.actions.*;
 import io.delta.kernel.internal.checkpoints.SidecarFile;
 import io.delta.kernel.internal.checksum.CRCInfo;
 import io.delta.kernel.internal.checksum.ChecksumReader;
+import io.delta.kernel.internal.checksum.FileSizeHistogram;
 import io.delta.kernel.internal.fs.Path;
 import io.delta.kernel.internal.lang.Lazy;
 import io.delta.kernel.internal.metrics.SnapshotMetrics;
@@ -208,6 +209,10 @@ public class LogReplay {
     LongAdder fileSize = new LongAdder();
     LongAdder fileCount = new LongAdder();
     Optional<DomainMetadata> domainMetadata;
+    Optional<FileSizeHistogram> histogram =
+        cachedCrcInfo
+            .map(crcInfo -> crcInfo.fileSizeHistogram())
+            .orElse(Optional.of(FileSizeHistogram.init()));
 
     CloseableIterator<FilteredColumnarBatch> deltaIter =
         new ActiveAddFilesIterator(engine, addRemoveIter, dataPath);
@@ -217,6 +222,8 @@ public class LogReplay {
               .getRows()
               .forEachRemaining(
                   row -> {
+                    histogram.ifPresent(
+                        h -> h.insert(new AddFile(row.getStruct(schema.indexOf("add"))).getSize()));
                     fileSize.add(new AddFile(row.getStruct(schema.indexOf("add"))).getSize());
                     fileCount.add(1);
                   });
@@ -233,7 +240,8 @@ public class LogReplay {
         protocolAndMetadata._1,
         fileSize.longValue(),
         fileCount.longValue(),
-        Optional.empty());
+        Optional.empty(),
+        histogram);
   }
 
   public Metadata getMetadata() {

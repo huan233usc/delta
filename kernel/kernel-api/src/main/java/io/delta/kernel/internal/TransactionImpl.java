@@ -30,6 +30,7 @@ import io.delta.kernel.expressions.Column;
 import io.delta.kernel.internal.actions.*;
 import io.delta.kernel.internal.checksum.CRCInfo;
 import io.delta.kernel.internal.checksum.ChecksumWriter;
+import io.delta.kernel.internal.checksum.FileSizeHistogram;
 import io.delta.kernel.internal.data.TransactionStateRow;
 import io.delta.kernel.internal.fs.Path;
 import io.delta.kernel.internal.metrics.TransactionMetrics;
@@ -336,6 +337,11 @@ public class TransactionImpl implements Transaction {
       // Action counters may be partially incremented from previous tries, reset the counters to 0
       transactionMetrics.resetActionCounters();
 
+      Optional<FileSizeHistogram> histogram =
+          readSnapshot.getVersion(engine) == -1
+              ? Optional.of(FileSizeHistogram.init())
+              : getFileSizeHistogramFromCrc(engine);
+
       // Write the staged data to a delta file
       wrapEngineExceptionThrowsIO(
           () -> {
@@ -349,6 +355,7 @@ public class TransactionImpl implements Transaction {
                           if (!action.isNullAt(ADD_FILE_ORDINAL)) {
                             transactionMetrics.addFilesCounter.increment();
                             AddFile addFile = new AddFile(action.getStruct(ADD_FILE_ORDINAL));
+                            histogram.ifPresent(h -> h.insert(addFile.getSize()));
                             transactionMetrics.addFilesSizeInBytesCounter.increment(
                                 addFile.getSize());
                           } else if (!action.isNullAt(REMOVE_FILE_ORDINAL)) {
@@ -365,7 +372,7 @@ public class TransactionImpl implements Transaction {
           commitAsVersion,
           isReadyForCheckpoint(commitAsVersion),
           buildPostCommitCrcInfo(
-              commitAsVersion, transactionMetrics.captureTransactionMetricsResult()),
+              commitAsVersion, transactionMetrics.captureTransactionMetricsResult(), histogram),
           false);
     } catch (FileAlreadyExistsException e) {
       throw e;
@@ -380,8 +387,21 @@ public class TransactionImpl implements Transaction {
     return true;
   }
 
+  private Optional<FileSizeHistogram> getFileSizeHistogramFromCrc(Engine engine) {
+    if (!readSnapshot.getCachedCrcInfo().isPresent()) {
+      return Optional.empty();
+    }
+    CRCInfo cachedCrcInfo = readSnapshot.getCachedCrcInfo().get();
+    if (cachedCrcInfo.getVersion() != readSnapshot.getVersion(engine)) {
+      return Optional.empty();
+    }
+    return cachedCrcInfo.fileSizeHistogram();
+  }
+
   private Optional<CRCInfo> buildPostCommitCrcInfo(
-      long commitAtVersion, TransactionMetricsResult metricsResult) {
+      long commitAtVersion,
+      TransactionMetricsResult metricsResult,
+      Optional<FileSizeHistogram> histogram) {
     if (commitAtVersion == 0) {
       return Optional.of(
           new CRCInfo(
@@ -390,7 +410,8 @@ public class TransactionImpl implements Transaction {
               protocol,
               metricsResult.getTotalAddFilesSizeInBytes(),
               metricsResult.getNumAddFiles(),
-              Optional.of(txnId.toString())));
+              Optional.of(txnId.toString()),
+              histogram));
     }
     // Retry or CRC is read for old version
     if (!readSnapshot.getCachedCrcInfo().isPresent()
@@ -406,7 +427,8 @@ public class TransactionImpl implements Transaction {
             protocol,
             lastCrcInfo.getTableSizeBytes() + metricsResult.getTotalAddFilesSizeInBytes(),
             lastCrcInfo.getNumFiles() + metricsResult.getNumAddFiles(),
-            Optional.of(txnId.toString())));
+            Optional.of(txnId.toString()),
+            histogram));
   }
 
   /**

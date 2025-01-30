@@ -42,12 +42,16 @@ public class CRCInfo {
     Optional<String> txnId =
         Optional.ofNullable(
             batch.getColumnVector(CRC_FILE_SCHEMA.indexOf("txnId")).getString(rowId));
+    Optional<FileSizeHistogram> histogram =
+        FileSizeHistogram.fromColumnVector(
+            batch.getColumnVector(CRC_FILE_SCHEMA.indexOf("fileSizeHistogram")), rowId);
     //  protocol and metadata are nullable per fromColumnVector's implementation.
     if (protocol == null || metadata == null) {
       logger.warn("Invalid checksum file missing protocol and/or metadata: {}", crcFilePath);
       return Optional.empty();
     }
-    return Optional.of(new CRCInfo(version, metadata, protocol, tableSizeBytes, numFiles, txnId));
+    return Optional.of(
+        new CRCInfo(version, metadata, protocol, tableSizeBytes, numFiles, txnId, histogram));
   }
 
   private final long version;
@@ -56,6 +60,7 @@ public class CRCInfo {
   private final long tableSizeBytes;
   private final long numFiles;
   private final Optional<String> txnId;
+  private final Optional<FileSizeHistogram> histogram;
 
   public CRCInfo(
       long version,
@@ -63,13 +68,15 @@ public class CRCInfo {
       Protocol protocol,
       long tableSizeBytes,
       long numFiles,
-      Optional<String> txnId) {
+      Optional<String> txnId,
+      Optional<FileSizeHistogram> histogram) {
     this.version = version;
     this.metadata = requireNonNull(metadata);
     this.protocol = requireNonNull(protocol);
     this.tableSizeBytes = tableSizeBytes;
     this.numFiles = numFiles;
     this.txnId = txnId;
+    this.histogram = histogram;
   }
 
   /** The version of the Delta table that this CRCInfo represents. */
@@ -97,5 +104,9 @@ public class CRCInfo {
 
   public Optional<String> getTxnId() {
     return txnId;
+  }
+
+  public Optional<FileSizeHistogram> fileSizeHistogram() {
+    return histogram;
   }
 }

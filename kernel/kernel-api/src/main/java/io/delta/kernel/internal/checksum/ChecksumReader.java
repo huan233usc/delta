@@ -118,6 +118,7 @@ public class ChecksumReader {
 
       return CRCInfo.fromColumnarBatch(crcVersion, batch, 0 /* rowId */, filePath.toString());
     } catch (Exception e) {
+      System.out.println(e.toString());
       // This can happen when the version does not have a checksum file
       logger.warn("Failed to read checksum file {}", filePath, e);
       return Optional.empty();
