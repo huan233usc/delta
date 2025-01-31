@@ -23,6 +23,8 @@ import io.delta.kernel.TransactionCommitResult;
 import io.delta.kernel.data.*;
 import io.delta.kernel.engine.Engine;
 import io.delta.kernel.types.*;
+import org.apache.hadoop.fs.s3a.Constants;
+import org.apache.hadoop.fs.s3a.S3AFileSystem;
 
 import io.delta.kernel.defaults.engine.DefaultEngine;
 
@@ -30,7 +32,17 @@ import io.delta.kernel.defaults.internal.data.DefaultColumnarBatch;
 
 public class BaseTableWriter {
 
-    protected final Engine engine = DefaultEngine.create(new Configuration());
+
+    protected final Engine engine = DefaultEngine.create(getConfig());
+
+    private static Configuration getConfig() {
+        Configuration conf = new Configuration();
+//        conf.set("fs.s3a.path.style.access", "true");
+        conf.set("fs.s3a.region", "us-west-2");
+        conf.set("fs.s3a.aws.credentials.provider",
+                "org.apache.hadoop.fs.s3a.TemporaryAWSCredentialsProvider");
+        return conf;
+    }
 
     /**
      * Schema used in examples for table create and/or writes

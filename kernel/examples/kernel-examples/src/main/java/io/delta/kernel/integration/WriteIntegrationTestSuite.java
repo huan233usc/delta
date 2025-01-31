@@ -115,7 +115,7 @@ public class WriteIntegrationTestSuite {
     }
 
     private String tmpLocation() throws IOException {
-        return Files.createTempDirectory("delta" + UUID.randomUUID()).toString();
+        return "s3a://databricks-tdas/hxin-test/delta" + UUID.randomUUID().toString();
     }
 
     interface CheckedFunction<T> {

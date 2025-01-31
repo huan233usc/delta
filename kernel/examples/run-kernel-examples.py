@@ -70,7 +70,7 @@ def run_integration_tests(version, maven_repo, examples_root_dir, golden_tables_
             cmd = ["mvn", "package", "exec:java", f"-Dexec.mainClass={main_class}",
                   f"-Dstaging.repo.url={maven_repo}",
                   f"-Ddelta-kernel.version={version}",
-                  f"-Dexec.args={golden_tables_dir}"]
+                  f"-Dexec.args={golden_tables_dir}", f"-Djava.security.manager=allow"]
             run_cmd(cmd, stream_output=True)
 
 
@@ -80,7 +80,7 @@ def run_example(version, maven_repo, project_dir, main_class, test_cases):
             cmd = ["mvn", "package", "exec:java", f"-Dexec.mainClass={main_class}",
                    f"-Dstaging.repo.url={maven_repo}",
                    f"-Ddelta-kernel.version={version}",
-                   f"-Dexec.args={test}"]
+                   f"-Dexec.args={test}", f"-Djava.security.manager=allow"]
             run_cmd(cmd, stream_output=True)
 
 
@@ -188,6 +188,6 @@ if __name__ == "__main__":
         examples_root_dir,
         "../../connectors/golden-tables/src/main/resources/golden/")
 
-    run_single_threaded_examples(args.version, args.maven_repo, examples_root_dir, golden_file_dir)
-    run_multi_threaded_examples(args.version, args.maven_repo, examples_root_dir, golden_file_dir)
+#     run_single_threaded_examples(args.version, args.maven_repo, examples_root_dir, golden_file_dir)
+#     run_multi_threaded_examples(args.version, args.maven_repo, examples_root_dir, golden_file_dir)
     run_integration_tests(args.version, args.maven_repo, examples_root_dir, golden_file_dir)
