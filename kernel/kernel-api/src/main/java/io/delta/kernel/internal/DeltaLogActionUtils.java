@@ -233,11 +233,13 @@ public class DeltaLogActionUtils {
                 // Checkpoint files of 0 size are invalid but may be ignored silently when read,
                 // hence we ignore them so that we never pick up such checkpoints.
                 // Here, we do nothing (we will consume this file).
+              } else if (fileTypes.contains(DeltaLogFileType.CHECKSUM)
+                  && FileNames.isChecksumFile(getName(fs.getPath()))) {
+                // Here, we do nothing (we will consume this file).
               } else {
                 logger.debug("Ignoring file {} as it is not of the desired type", fs.getPath());
                 return BreakableFilterResult.EXCLUDE; // Here, we exclude and filter out this file.
               }
-
               final long fileVersion = FileNames.getFileVersion(new Path(fs.getPath()));
 
               if (fileVersion < startVersion) {
@@ -258,7 +260,8 @@ public class DeltaLogActionUtils {
                         tablePath.toString(), endVersion, earliestVersion);
                   } else {
                     logger.debug(
-                        "Stopping listing; found file {} with version greater than endVersion {}",
+                        "Stopping listing; found file {} with"
+                            + " version greater than endVersion {}",
                         fs.getPath(),
                         endVersion);
                     return BreakableFilterResult.BREAK;
@@ -267,7 +270,6 @@ public class DeltaLogActionUtils {
               }
 
               hasReturnedAnElement.set(true);
-
               return BreakableFilterResult.INCLUDE;
             });
   }

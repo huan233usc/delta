@@ -36,6 +36,7 @@ public class LogSegment {
   public final long version;
   public final List<FileStatus> deltas;
   public final List<FileStatus> checkpoints;
+  public final Optional<FileStatus> lastSeenCheckSum;
   public final Optional<Long> checkpointVersionOpt;
   public final long lastCommitTimestamp;
 
@@ -43,7 +44,8 @@ public class LogSegment {
   private final Lazy<List<FileStatus>> allFilesReversed;
 
   public static LogSegment empty(Path logPath) {
-    return new LogSegment(logPath, -1, Collections.emptyList(), Collections.emptyList(), -1);
+    return new LogSegment(
+        logPath, -1, Collections.emptyList(), Collections.emptyList(), Optional.empty(), -1);
   }
 
   /**
@@ -63,6 +65,7 @@ public class LogSegment {
       long version,
       List<FileStatus> deltas,
       List<FileStatus> checkpoints,
+      Optional<FileStatus> lastSeenCheckSum,
       long lastCommitTimestamp) {
 
     ///////////////////////
@@ -124,6 +127,7 @@ public class LogSegment {
     this.deltas = deltas;
     this.checkpoints = checkpoints;
     this.lastCommitTimestamp = lastCommitTimestamp;
+    this.lastSeenCheckSum = lastSeenCheckSum;
 
     this.allFiles =
         new Lazy<>(
