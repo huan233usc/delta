@@ -33,6 +33,7 @@ import io.delta.kernel.internal.checksum.CRCInfo;
 import io.delta.kernel.internal.data.TransactionStateRow;
 import io.delta.kernel.internal.fs.Path;
 import io.delta.kernel.internal.hook.CheckpointHook;
+import io.delta.kernel.internal.hook.ChecksumFullHook;
 import io.delta.kernel.internal.hook.ChecksumSimpleHook;
 import io.delta.kernel.internal.metrics.TransactionMetrics;
 import io.delta.kernel.internal.metrics.TransactionReportImpl;
@@ -364,8 +365,14 @@ public class TransactionImpl implements Transaction {
         postCommitHooks.add(new CheckpointHook(dataPath, commitAsVersion));
       }
 
-      buildPostCommitCrcInfo(commitAsVersion, transactionMetrics.captureTransactionMetricsResult())
-          .ifPresent(crcInfo -> postCommitHooks.add(new ChecksumSimpleHook(crcInfo, logPath)));
+      Optional<CRCInfo> postCommitCrcInfo =
+          buildPostCommitCrcInfo(
+              commitAsVersion, transactionMetrics.captureTransactionMetricsResult());
+      if (postCommitCrcInfo.isPresent()) {
+        postCommitHooks.add(new ChecksumSimpleHook(postCommitCrcInfo.get(), logPath));
+      } else {
+        postCommitHooks.add(new ChecksumFullHook(dataPath, commitAsVersion));
+      }
 
       return new TransactionCommitResult(commitAsVersion, postCommitHooks);
     } catch (FileAlreadyExistsException e) {

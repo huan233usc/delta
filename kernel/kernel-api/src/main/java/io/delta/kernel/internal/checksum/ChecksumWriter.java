@@ -51,9 +51,7 @@ public class ChecksumWriter {
           engine
               .getJsonHandler()
               .writeJsonFileAtomically(
-                  newChecksumPath.toString(),
-                  singletonCloseableIterator(toRow(crcInfo)),
-                  false /* overwrite */);
+                  newChecksumPath.toString(), singletonCloseableIterator(toRow(crcInfo)), false);
           logger.info("Write checksum file `{}` succeeds", newChecksumPath);
           return null;
         },

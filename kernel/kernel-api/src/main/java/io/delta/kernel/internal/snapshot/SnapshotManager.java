@@ -20,6 +20,7 @@ import static io.delta.kernel.internal.DeltaErrors.wrapEngineExceptionThrowsIO;
 import static io.delta.kernel.internal.TableConfig.EXPIRED_LOG_CLEANUP_ENABLED;
 import static io.delta.kernel.internal.TableConfig.LOG_RETENTION;
 import static io.delta.kernel.internal.TableFeatures.validateWriteSupportedTable;
+import static io.delta.kernel.internal.actions.SingleAction.CHECKPOINT_SCHEMA;
 import static io.delta.kernel.internal.replay.LogReplayUtils.assertLogFilesBelongToTable;
 import static io.delta.kernel.internal.snapshot.MetadataCleanup.cleanupExpiredLogs;
 import static io.delta.kernel.internal.util.Preconditions.checkArgument;
@@ -31,9 +32,12 @@ import io.delta.kernel.exceptions.CheckpointAlreadyExistsException;
 import io.delta.kernel.exceptions.InvalidTableException;
 import io.delta.kernel.exceptions.TableNotFoundException;
 import io.delta.kernel.internal.*;
+import io.delta.kernel.internal.actions.AddFile;
 import io.delta.kernel.internal.actions.Metadata;
 import io.delta.kernel.internal.annotation.VisibleForTesting;
 import io.delta.kernel.internal.checkpoints.*;
+import io.delta.kernel.internal.checksum.CRCInfo;
+import io.delta.kernel.internal.checksum.ChecksumWriter;
 import io.delta.kernel.internal.fs.Path;
 import io.delta.kernel.internal.lang.ListUtils;
 import io.delta.kernel.internal.metrics.SnapshotQueryContext;
@@ -48,6 +52,7 @@ import java.io.*;
 import java.nio.file.FileAlreadyExistsException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -205,6 +210,48 @@ public class SnapshotManager {
       logger.info(
           "{}: Log cleanup is disabled. Skipping the deletion of expired log files", tablePath);
     }
+  }
+
+  public void checksum(Engine engine, long version) throws IOException {
+    ChecksumWriter checksumWriter = new ChecksumWriter(logPath);
+    SnapshotImpl snapshot =
+        (SnapshotImpl)
+            getSnapshotAt(
+                engine,
+                version,
+                SnapshotQueryContext.forVersionSnapshot(tablePath.toString(), version));
+    if (snapshot.getCurrentCrcInfo().isPresent()) {
+      checksumWriter.writeCheckSum(engine, snapshot.getCurrentCrcInfo().get());
+      return;
+    }
+
+    // TODO: Optimize using crc after https://github.com/delta-io/delta/pull/4112
+    LongAdder tableSizeByte = new LongAdder();
+    LongAdder fileCount = new LongAdder();
+    CreateCheckpointIterator currentTableStateIterator =
+        snapshot.getCreateCheckpointIterator(engine);
+    currentTableStateIterator.forEachRemaining(
+        batch ->
+            batch
+                .getRows()
+                .forEachRemaining(
+                    // TODO: Collect domain metadata, ict etc.
+                    row -> {
+                      if (!row.isNullAt(CHECKPOINT_SCHEMA.indexOf("add"))) {
+                        tableSizeByte.add(
+                            new AddFile(row.getStruct(CHECKPOINT_SCHEMA.indexOf("add"))).getSize());
+                        fileCount.add(1);
+                      }
+                    }));
+    checksumWriter.writeCheckSum(
+        engine,
+        new CRCInfo(
+            version,
+            snapshot.getMetadata(),
+            snapshot.getProtocol(),
+            tableSizeByte.longValue(),
+            fileCount.longValue(),
+            Optional.empty()));
   }
 
   ////////////////////
