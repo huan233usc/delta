@@ -143,4 +143,16 @@ public interface Table {
    */
   void checkpoint(Engine engine, long version)
       throws TableNotFoundException, CheckpointAlreadyExistsException, IOException;
+
+  /**
+   * Checkpoint the table at given version. It writes a single checkpoint file.
+   *
+   * @param engine {@link Engine} instance to use.
+   * @param version Version to checkpoint.
+   * @throws TableNotFoundException if the table is not found
+   * @throws CheckpointAlreadyExistsException if a checkpoint already exists at the given version
+   * @throws IOException for any I/O error.
+   * @since 3.2.0
+   */
+  void checksum(Engine engine, long version) throws TableNotFoundException, IOException;
 }

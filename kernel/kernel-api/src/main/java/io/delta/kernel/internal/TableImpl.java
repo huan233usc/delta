@@ -135,6 +135,12 @@ public class TableImpl implements Table {
   }
 
   @Override
+  public void checksum(Engine engine, long version)
+      throws TableNotFoundException, CheckpointAlreadyExistsException, IOException {
+    snapshotManager.checksum(engine, version);
+  }
+
+  @Override
   public TransactionBuilder createTransactionBuilder(
       Engine engine, String engineInfo, Operation operation) {
     return new TransactionBuilderImpl(this, engineInfo, operation);

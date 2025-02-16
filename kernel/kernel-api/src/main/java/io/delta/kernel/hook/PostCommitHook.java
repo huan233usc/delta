@@ -40,7 +40,8 @@ public interface PostCommitHook {
      * transaction commits. This operation has a minimal latency with no requirement of reading
      * previous checkpoint or logs.
      */
-    CHECKSUM_SIMPLE
+    CHECKSUM_SIMPLE,
+    CHECKSUM_FULL
   }
 
   /** Invokes the post commit operation whose implementation must be thread safe. */

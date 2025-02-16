@@ -115,9 +115,22 @@ class ChecksumSimpleComparisonSuite extends AnyFunSuite with TestUtils {
     val kernelCrc = readCrcInfo(engine, kernelTablePath, version)
 
     assertCrcInfoEquals(sparkCrc, kernelCrc)
+    var checksumFullCrc = readCrcInfoFromChecksumFull(engine, kernelTablePath, version)
+    assertCrcInfoEquals(sparkCrc, checksumFullCrc)
   }
 
   private def readCrcInfo(engine: Engine, path: String, version: Long): CRCInfo = {
+    ChecksumReader
+      .getCRCInfo(engine, new Path(s"$path/_delta_log"), version, version)
+      .orElseThrow(() => new IllegalStateException(s"CRC info not found for version $version"))
+  }
+
+  private def readCrcInfoFromChecksumFull(engine: Engine, path: String, version: Long): CRCInfo = {
+//    assert(Files.deleteIfExists(buildCrcPath(path, version)))
+    defaultEngine.getFileSystemClient.delete(buildCrcPath(path, version).toString)
+    Table
+      .forPath(engine, path)
+      .checksum(engine, version);
     ChecksumReader
       .getCRCInfo(engine, new Path(s"$path/_delta_log"), version, version)
       .orElseThrow(() => new IllegalStateException(s"CRC info not found for version $version"))
