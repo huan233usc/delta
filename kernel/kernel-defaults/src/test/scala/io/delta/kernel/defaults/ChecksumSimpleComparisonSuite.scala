@@ -126,7 +126,6 @@ class ChecksumSimpleComparisonSuite extends AnyFunSuite with TestUtils {
   }
 
   private def readCrcInfoFromChecksumFull(engine: Engine, path: String, version: Long): CRCInfo = {
-//    assert(Files.deleteIfExists(buildCrcPath(path, version)))
     defaultEngine.getFileSystemClient.delete(buildCrcPath(path, version).toString)
     Table
       .forPath(engine, path)
