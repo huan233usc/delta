@@ -48,7 +48,6 @@ import io.delta.kernel.internal.rowtracking.RowTracking;
 import io.delta.kernel.internal.tablefeatures.TableFeatures;
 import io.delta.kernel.internal.util.*;
 import io.delta.kernel.internal.util.Clock;
-import io.delta.kernel.internal.util.ColumnMapping;
 import io.delta.kernel.internal.util.FileNames;
 import io.delta.kernel.internal.util.InCommitTimestampUtils;
 import io.delta.kernel.internal.util.VectorUtils;
@@ -125,14 +124,7 @@ public class TransactionImpl implements Transaction {
 
   @Override
   public Row getTransactionState(Engine engine) {
-    ColumnMapping.ColumnMappingMode mappingMode =
-        ColumnMapping.getColumnMappingMode(metadata.getConfiguration());
-    StructType basePhysicalSchema = metadata.getSchema();
-    StructType physicalSchema =
-        ColumnMapping.convertToPhysicalSchema(
-            metadata.getSchema(), basePhysicalSchema, mappingMode);
-
-    return TransactionStateRow.of(metadata, dataPath.toString(), physicalSchema);
+    return TransactionStateRow.of(metadata, dataPath.toString());
   }
 
   @Override
