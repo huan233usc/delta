@@ -44,21 +44,9 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.scala.DefaultScalaModule
 import org.apache.logging.log4j.Level
 
-import org.apache.spark.internal.Logging
-
 class DeltaStructuredLoggingSuite extends DeltaStructuredLoggingSuiteBase {
   override def className: String = classOf[DeltaStructuredLoggingSuite].getSimpleName
   override def logFilePath: String = "target/structured.log"
-
-  override def beforeAll(): Unit = {
-    super.beforeAll()
-    Logging.enableStructuredLogging()
-  }
-
-  override def afterAll(): Unit = {
-    Logging.disableStructuredLogging()
-    super.afterAll()
-  }
 
   private val jsonMapper = new ObjectMapper().registerModule(DefaultScalaModule)
   private def compactAndToRegexPattern(json: String): String = {
@@ -149,6 +137,9 @@ class DeltaStructuredLoggingSuite extends DeltaStructuredLoggingSuiteBase {
           "ts": "<timestamp>",
           "level": "$level",
           "msg": "Custom log message.",
+          "context": {
+              "custom_log_key": "Custom log message."
+          },
           "logger": "$className"
         }"""
     )

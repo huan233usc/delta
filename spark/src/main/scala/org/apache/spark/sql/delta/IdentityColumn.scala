@@ -18,7 +18,6 @@ package org.apache.spark.sql.delta
 
 import scala.collection.mutable
 
-import org.apache.spark.sql.delta.DataFrameUtils
 import org.apache.spark.sql.delta.ClassicColumnConversions._
 import org.apache.spark.sql.delta.metering.DeltaLogging
 import org.apache.spark.sql.delta.sources.DeltaSourceUtils._
@@ -142,7 +141,7 @@ object IdentityColumn extends DeltaLogging {
 
     // Resolve the collection expression by constructing a query to select the expression from a
     // table with the statsSchema and get the analyzed expression.
-    val resolvedPlan = DataFrameUtils.ofRows(spark, LocalRelation(statsDataSchema))
+    val resolvedPlan = Dataset.ofRows(spark, LocalRelation(statsDataSchema))
       .select(unresolvedExpr).queryExecution.analyzed
 
     // We have to use the new attributes with regenerated attribute IDs, because the Analyzer

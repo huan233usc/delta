@@ -494,8 +494,6 @@ That means specifically that for any commit…
  - it is **legal** for the same `path` to occur in an `add` action and a `remove` action, but with two different `dvId`s.
  - it is **legal** for the same `path` to be added and/or removed and also occur in a `cdc` action.
  - it is **illegal** for the same `path` to be occur twice with different `dvId`s within each set of `add` or `remove` actions.
- - it is **illegal** for a `path` to occur in an `add` action that already occurs with a different `dvId` in the list of `add` actions from the snapshot of the version immediately preceeding the commit, unless the commit also contains a remove for the later combination.
- - it is **legal** to commit an existing `path` and `dvId` combination again (this allows metadata updates).
 
 The `dataChange` flag on either an `add` or a `remove` can be set to `false` to indicate that an action when combined with other actions in the same atomic version only rearranges existing data or adds new statistics.
 For example, streaming queries that are tailing the transaction log can use this flag to skip actions that would not affect the final results.
@@ -579,9 +577,7 @@ The following is an example `remove` action.
 ```
 
 ### Add CDC File
-The `cdc` action is used to add a [file](#change-data-files) containing only the data that was changed as part of the transaction. The `cdc` action is allowed to add a [Data File](#data-files) that is also added by an `add` action, when it does not contain any copied rows and the `_change_type` column is filled for all rows.
-
-When change data readers encounter a `cdc` action in a particular Delta table version, they must read the changes made in that version exclusively using the `cdc` files. If a version has no `cdc` action, then the data in `add` and `remove` actions are read as inserted and deleted rows, respectively.
+The `cdc` action is used to add a [file](#change-data-files) containing only the data that was changed as part of the transaction. When change data readers encounter a `cdc` action in a particular Delta table version, they must read the changes made in that version exclusively using the `cdc` files. If a version has no `cdc` action, then the data in `add` and `remove` actions are read as inserted and deleted rows, respectively.
 
 The schema of the `cdc` action is as follows:
 
@@ -627,7 +623,7 @@ Specifically, to read the row-level changes made in a version, the following str
 
 ##### Note for non-change data readers
 
-In a table with Change Data Feed enabled, the data Parquet files referenced by `add` and `remove` actions are allowed to contain an extra column `_change_type`. This column is not present in the table's schema. When accessing these files, readers should disregard this column and only process columns defined within the table's schema.
+In a table with Change Data Feed enabled, the data Parquet files referenced by `add` and `remove` actions are allowed to contain an extra column `_change_type`. This column is not present in the table's schema and will consistently have a `null` value. When accessing these files, readers should disregard this column and only process columns defined within the table's schema.
 
 ### Transaction Identifiers
 Incremental processing systems (e.g., streaming systems) that track progress using their own application-specific versions need to record what progress has been made, in order to avoid duplicating data in the face of failures and retries during a write.
@@ -833,7 +829,7 @@ A given snapshot of the table can be computed by replaying the events committed 
  - A single `metaData` action
  - A collection of `txn` actions with unique `appId`s
  - A collection of `domainMetadata` actions with unique `domain`s.
- - A collection of `add` actions with unique path keys, corresponding to the newest (path, deletionVector.uniqueId) pair encountered for each path.
+ - A collection of `add` actions with unique `(path, deletionVector.uniqueId)` keys.
  - A collection of `remove` actions with unique `(path, deletionVector.uniqueId)` keys. The intersection of the primary keys in the `add` collection and `remove` collection must be empty. That means a logical file cannot exist in both the `remove` and `add` collections at the same time; however, the same *data file* can exist with *different* DVs in the `remove` collection, as logically they represent different content. The `remove` actions act as _tombstones_, and only exist for the benefit of the VACUUM command. Snapshot reads only return `add` actions on the read path.
  
 To achieve the requirements above, related actions from different delta files need to be reconciled with each other:
@@ -1028,7 +1024,6 @@ When supported and active, writers must:
 - Block replacing partitioned tables with a differently-named partition spec
   - e.g. replacing a table partitioned by `part_a INT` with partition spec `part_b INT` must be blocked
   - e.g. replacing a table partitioned by `part_a INT` with partition spec `part_a LONG` is allowed
-- When the [Type Widening](#type-widening) table feature is supported, require that all type changes applied on the table are supported by [Iceberg V2](https://iceberg.apache.org/spec/#schema-evolution), based on the [Type Change Metadata](#type-change-metadata) recorded in the table schema.
 
 # Iceberg Compatibility V2
 
@@ -1055,7 +1050,6 @@ When this feature is supported and enabled, writers must:
 - Block replacing partitioned tables with a differently-named partition spec
   - e.g. replacing a table partitioned by `part_a INT` with partition spec `part_b INT` must be blocked
   - e.g. replacing a table partitioned by `part_a INT` with partition spec `part_a LONG` is allowed
-- When the [Type Widening](#type-widening) table feature is supported, require that all type changes applied on the table are supported by [Iceberg V2](https://iceberg.apache.org/spec/#schema-evolution), based on the [Type Change Metadata](#type-change-metadata) recorded in the table schema.
 
 ### Example of storing identifiers for nested fields in ArrayType and MapType
 The following is an example of storing the identifiers for nested fields in `ArrayType` and `MapType`, of a table with the following schema,
@@ -1475,140 +1469,6 @@ Furthermore, when attempting timestamp-based time travel where table state must 
 1. If `timestamp X` >= `delta.inCommitTimestampEnablementTimestamp`, only table versions >= `delta.inCommitTimestampEnablementVersion` should be considered for the query.
 2. Otherwise, only table versions less than `delta.inCommitTimestampEnablementVersion` should be considered for the query.
 
-# Type Widening
-
-The Type Widening feature enables changing the type of a column or field in an existing Delta table to a wider type.
-
-The supported type changes are:
-- Integer widening:
-  - `Byte` -> `Short` -> `Int` -> `Long`
-- Floating-point widening:
-  - `Float` -> `Double`
-  - `Byte`, `Short` or `Int` -> `Double`
-- Date widening:
-  - `Date` -> `Timestamp without timezone`
-- Decimal widening - `p` and `s` denote the decimal precision and scale respectively.
-  - `Decimal(p, s)` -> `Decimal(p + k1, s + k2)` where `k1 >= k2 >= 0`.
-  - `Byte`, `Short` or `Int` -> `Decimal(10 + k1, k2)` where `k1 >= k2 >= 0`.
-  - `Long` -> `Decimal(20 + k1, k2)` where `k1 >= k2 >= 0`.
-
-To support this feature:
-- The table must be on Reader version 3 and Writer Version 7.
-- The feature `typeWidening` must exist in the table `protocol`'s `readerFeatures` and `writerFeatures`, either during its creation or at a later stage.
-
-When supported:
- - A table may have a metadata property `delta.enableTypeWidening` in the Delta schema set to `true`. Writers must reject widening type changes when this property isn't set to `true`.
- - The `metadata` for a column or field in the table schema may contain the key `delta.typeChanges` storing a history of type changes for that column or field.
-
-### Type Change Metadata
-
-Type changes applied to a table are recorded in the table schema and stored in the `metadata` of their nearest ancestor [StructField](#struct-field) using the key `delta.typeChanges`.
-The value for the key `delta.typeChanges` must be a JSON list of objects, where each object contains the following fields:
-Field Name | optional/required | Description
--|-|-
-`fromType`| required | The type of the column or field before the type change.
-`toType`| required | The type of the column or field after the type change.
-`fieldPath`| optional | When updating the type of a map key/value or array element only: the path from the struct field holding the metadata to the map key/value or array element that was updated.
-
-The `fieldPath` value is "key", "value" and "element"  when updating resp. the type of a map key, map value and array element.
-The `fieldPath` value for nested maps and nested arrays are prefixed by their parents's path, separated by dots.
-
-The following is an example for the definition of a column that went through two type changes:
-```json
-{
-    "name" : "e",
-    "type" : "long",
-    "nullable" : true,
-    "metadata" : { 
-      "delta.typeChanges": [
-        {
-          "fromType": "short",
-          "toType": "integer"
-        },
-        {
-          "fromType": "integer",
-          "toType": "long"
-        }
-      ]
-    }
-  }
-```
-
-The following is an example for the definition of a column after changing the type of a map key:
-```json
-{
-    "name" : "e",
-    "type" : {
-      "type": "map",
-      "keyType": "double",
-      "valueType": "integer",
-      "valueContainsNull": true
-    },
-    "nullable" : true,
-    "metadata" : { 
-      "delta.typeChanges": [
-        {
-          "fromType": "float",
-          "toType": "double",
-          "fieldPath": "key"
-        }
-      ]
-    }
-  }
-```
-
-The following is an example for the definition of a column after changing the type of a map value nested in an array:
-```json
-{
-    "name" : "e",
-    "type" : {
-      "type": "array",
-      "elementType": {
-        "type": "map",
-        "keyType": "string",
-        "valueType": "decimal(10, 4)",
-        "valueContainsNull": true
-      },
-      "containsNull": true
-    },
-    "nullable" : true,
-    "metadata" : { 
-      "delta.typeChanges": [
-        {
-          "fromType": "decimal(6, 2)",
-          "toType": "decimal(10, 4)",
-          "fieldPath": "element.value"
-        }
-      ]
-    }
-  }
-```
-
-## Writer Requirements for Type Widening
-
-When Type Widening is supported (when the `writerFeatures` field of a table's `protocol` action contains `typeWidening`), then:
-- Writers must reject applying any unsupported type change.
-- Writers must reject applying type changes not supported by [Iceberg V2](https://iceberg.apache.org/spec/#schema-evolution)
-  when either the [Iceberg Compatibility V1](#iceberg-compatibility-v1) or [Iceberg Compatibility V2](#iceberg-compatibility-v2) table feature is supported:
-  - `Byte`, `Short` or `Int` -> `Double`
-  - `Date`  -> `Timestamp without timezone`
-  - Decimal scale increase
-  - `Byte`, `Short`, `Int` or `Long` -> `Decimal`
-- Writers must record type change information in the `metadata` of the nearest ancestor [StructField](#struct-field). See [Type Change Metadata](#type-change-metadata).
-- Writers must preserve the `delta.typeChanges` field in the metadata fields in the schema when the table schema is updated.
-- Writers may remove the `delta.typeChanges` metadata in the table schema if all data files use the same field types as the table schema.
-
-When Type Widening is enabled (when the table property `delta.enableTypeWidening` is set to `true`), then:
-- Writers should allow updating the table schema to apply a supported type change to a column, struct field, map key/value or array element.
-
-When removing the Type Widening table feature from the table, in the version that removes `typeWidening` from the `writerFeatures` and `readerFeatures` fields of the table's `protocol` action:
-- Writers must ensure no `delta.typeChanges` metadata key is present in the table schema. This may require rewriting existing data files to ensure that all data files use the same field types as the table schema in order to fulfill the requirement to remove type widening metadata.
-- Writers must ensure that the table property `delta.enableTypeWidening` is not set.
-
-## Reader Requirements for Type Widening
-When Type Widening is supported (when the `readerFeatures` field of a table's `protocol` action contains `typeWidening`), then:
-- Readers must allow reading data files written before the table underwent any supported type change, and must convert such values to the current, wider type.
-- Readers must validate that they support all type changes in the `delta.typeChanges` field in the table schema for the table version they are reading and fail when finding any unsupported type change.
 
 # Requirements for Writers
 This section documents additional requirements that writers must follow in order to preserve some of the higher level guarantees that Delta provides.
@@ -1826,7 +1686,7 @@ the `cutoffCommit`, because a commit exactly at midnight is an acceptable cutoff
 2. Identify the newest checkpoint that is not newer than the `cutOffCommit`. A checkpoint at the `cutOffCommit` is ideal, but an older one will do. Lets call it `cutOffCheckpoint`.
 We need to preserve the `cutOffCheckpoint` and all commits after it, because we need them to enable
 time travel for commits between `cutOffCheckpoint` and the next available checkpoint.
-3. Delete all [delta log entries](#delta-log-entries) and [checkpoint files](#checkpoints) before the
+3. Delete all [delta log entries](#delta-log-entries and [checkpoint files](#checkpoints) before the
 `cutOffCheckpoint` checkpoint. Also delete all the [log compaction files](#log-compaction-files) having
 startVersion <= `cutOffCheckpoint`'s version.
 4. Now read all the available [checkpoints](#checkpoints-1) in the _delta_log directory and identify
@@ -2204,7 +2064,7 @@ delta.columnMapping.*| These keys are used to store information about the mappin
 delta.identity.*| These keys are for defining identity columns. See [Identity Columns](#identity-columns) for details.
 delta.invariants| JSON string contains SQL expression information. See [Column Invariants](#column-invariants) for details.
 delta.generationExpression| SQL expression string. See [Generated Columns](#generated-columns) for details.
-delta.typeChanges| JSON string containing information about previous type changes applied to this column. See [Type Change Metadata](#type-change-metadata) for details.
+
 
 ### Example
 

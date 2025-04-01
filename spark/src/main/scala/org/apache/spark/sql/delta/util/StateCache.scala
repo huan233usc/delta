@@ -18,8 +18,7 @@ package org.apache.spark.sql.delta.util
 
 import scala.collection.mutable.ArrayBuffer
 
-import org.apache.spark.sql.delta.{DataFrameUtils, Snapshot}
-import org.apache.spark.sql.delta.ClassicColumnConversions._
+import org.apache.spark.sql.delta.Snapshot
 import org.apache.spark.sql.delta.metering.DeltaLogging
 import org.apache.spark.sql.delta.sources.DeltaSQLConf
 
@@ -29,9 +28,9 @@ import org.apache.spark.sql.execution.{LogicalRDD, SQLExecution}
 import org.apache.spark.storage.StorageLevel
 
 /**
- * Machinery that caches the reconstructed state of a Delta table
+ * Machinary that caches the reconstructed state of a Delta table
  * using the RDD cache. The cache is designed so that the first access
- * will materialize the results.  However, once uncache is called,
+ * will materialize the results.  However once uncache is called,
  * all data will be flushed and will not be cached again.
  */
 trait StateCache extends DeltaLogging {
@@ -68,7 +67,7 @@ trait StateCache extends DeltaLogging {
         cached += rdd
         val dsCache = datasetRefCache { () =>
           val logicalRdd = LogicalRDD(qe.analyzed.output, rdd)(spark)
-          DataFrameUtils.ofRows(spark, logicalRdd)
+          Dataset.ofRows(spark, logicalRdd)
         }
         Some(dsCache)
       } else {
@@ -94,14 +93,14 @@ trait StateCache extends DeltaLogging {
       if (cached.synchronized(isCached) && cachedDs.isDefined) {
         cachedDs.get.get
       } else {
-        DataFrameUtils.ofRows(spark, ds.queryExecution.logical)
+        Dataset.ofRows(spark, ds.queryExecution.logical)
       }
     }
 
     /**
      * Retrieves the cached RDD as a strongly-typed Dataset.
      */
-    def getDS: Dataset[A] = getDF.as(ds.encoder)
+    def getDS: Dataset[A] = getDF.as[A](ds.exprEnc)
   }
 
   /**

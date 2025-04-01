@@ -1,5 +1,5 @@
 /*
- * Copyright (2024) The Delta Lake Project Authors.
+ * Copyright (2021) The Delta Lake Project Authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,10 +16,10 @@
 
 package org.apache.spark.sql.delta
 
-import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.{SparkSession, Strategy}
 import org.apache.spark.sql.catalyst.planning.ScanOperation
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
-import org.apache.spark.sql.execution.{SparkPlan, SparkStrategy}
+import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.execution.datasources.{FileSourceStrategy, HadoopFsRelation, LogicalRelationWithTable}
 
 /**
@@ -31,7 +31,7 @@ import org.apache.spark.sql.execution.datasources.{FileSourceStrategy, HadoopFsR
  * list.
  */
 case class PreprocessTableWithDVsStrategy(session: SparkSession)
-    extends SparkStrategy
+    extends Strategy
     with PreprocessTableWithDVs {
 
   override def apply(plan: LogicalPlan): Seq[SparkPlan] = plan match {

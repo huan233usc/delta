@@ -21,7 +21,6 @@ import java.util.concurrent.TimeUnit
 
 import org.apache.spark.sql.delta.skipping.clustering.ClusteredTableUtils
 import org.apache.spark.sql.delta._
-import org.apache.spark.sql.delta.Relocated
 import org.apache.spark.sql.delta.DeltaColumnMapping.filterColumnMappingProperties
 import org.apache.spark.sql.delta.actions.{Action, Metadata, Protocol, TableFeatureProtocolUtils}
 import org.apache.spark.sql.delta.actions.DomainMetadata
@@ -135,12 +134,7 @@ case class CreateDeltaTableCommand(
     }
 
     val tableLocation = getDeltaTablePath(tableWithLocation)
-    // To be safe, here we only extract file system options from table storage properties, to create
-    // the DeltaLog.
-    val fileSystemOptions = table.storage.properties.filter { case (k, _) =>
-      DeltaTableUtils.validDeltaTableHadoopPrefixes.exists(k.startsWith)
-    }
-    val deltaLog = DeltaLog.forTable(sparkSession, tableLocation, fileSystemOptions)
+    val deltaLog = DeltaLog.forTable(sparkSession, tableLocation)
     CoordinatedCommitsUtils.validateConfigurationsForCreateDeltaTableCommand(
       sparkSession, deltaLog.tableExists, query, tableWithLocation.properties)
 
@@ -199,7 +193,7 @@ case class CreateDeltaTableCommand(
           require(!query.isInstanceOf[RunnableCommand])
           // When using V1 APIs, the `query` plan is not yet optimized, therefore, it is safe
           // to once again go through analysis
-          val data = DataFrameUtils.ofRows(sparkSession, query)
+          val data = Dataset.ofRows(sparkSession, query)
           val options = new DeltaOptions(table.storage.properties, sparkSession.sessionState.conf)
           val deltaWriter = WriteIntoDelta(
             deltaLog = deltaLog,
@@ -795,7 +789,7 @@ case class CreateDeltaTableCommand(
    */
   private def isV1Writer: Boolean = {
     Thread.currentThread().getStackTrace.exists(_.toString.contains(
-      Relocated.dataFrameWriterClassName + "."))
+      classOf[DataFrameWriter[_]].getCanonicalName + "."))
   }
 
   /** Returns true if the current operation could be replacing a table. */

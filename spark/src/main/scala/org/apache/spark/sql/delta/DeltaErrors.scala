@@ -715,13 +715,6 @@ trait DeltaErrorsBase
     )
   }
 
-  def unsupportedDeepCloneException(): Throwable = {
-    new DeltaIllegalArgumentException(
-      errorClass = "DELTA_UNSUPPORTED_DEEP_CLONE",
-      messageParameters = Array.empty
-    )
-  }
-
   def viewInDescribeDetailException(view: TableIdentifier): Throwable = {
     new DeltaAnalysisException(
       errorClass = "DELTA_UNSUPPORTED_DESCRIBE_DETAIL_VIEW",
@@ -3090,6 +3083,13 @@ trait DeltaErrorsBase
 
   def partitionSchemaInIcebergTables: Throwable = {
     new DeltaIllegalArgumentException(errorClass = "DELTA_PARTITION_SCHEMA_IN_ICEBERG_TABLES")
+  }
+
+  def icebergTablePropertiesConflictException(duplicatedKeys: Set[String]): Throwable = {
+    new DeltaIllegalStateException(
+      errorClass = "DUPLICATE_KEY_IN_ICEBERG_TABLE_PROPERTY",
+      messageParameters = Array(duplicatedKeys.mkString(", "))
+    )
   }
 
   def icebergClassMissing(sparkConf: SparkConf, cause: Throwable): Throwable = {

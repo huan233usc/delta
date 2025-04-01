@@ -22,8 +22,6 @@ import java.{util => ju}
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 
-import org.apache.spark.sql.delta.ClassicColumnConversions._
-import org.apache.spark.sql.delta.DataFrameUtils
 import org.apache.spark.sql.delta.skipping.clustering.{ClusteredTableUtils, ClusteringColumnInfo}
 import org.apache.spark.sql.delta.skipping.clustering.temp.ClusterBySpec
 import org.apache.spark.sql.delta._
@@ -114,7 +112,7 @@ class DeltaTableV2 private[delta](
       // as Unity Catalog may add more table storage properties on the fly. We should respect it
       // and merge the table storage properties and Delta options.
       val dataSourceOptions = if (catalogTable.isDefined) {
-        // To be safe, here we only extract file system options from table storage properties and
+        // To be safe, here we only extra file system options from table storage properties and
         // the original `options` has higher priority than the table storage properties.
         val fileSystemOptions = catalogTable.get.storage.properties.filter { case (k, _) =>
           DeltaTableUtils.validDeltaTableHadoopPrefixes.exists(k.startsWith)
@@ -204,10 +202,10 @@ class DeltaTableV2 private[delta](
   }
 
   private lazy val tableSchema: StructType = {
-    val baseSchema = cdcRelation.map(_.schema).getOrElse(initialSnapshot.schema)
-    DeltaTableUtils.removeInternalDeltaMetadata(
-      spark, DeltaTableUtils.removeInternalWriterMetadata(spark, baseSchema)
-    )
+    val baseSchema = cdcRelation.map(_.schema).getOrElse {
+      DeltaTableUtils.removeInternalWriterMetadata(spark, initialSnapshot.schema)
+    }
+    DeltaTableUtils.removeInternalDeltaMetadata(spark, baseSchema)
   }
 
   override def schema(): StructType = tableSchema
@@ -314,7 +312,7 @@ class DeltaTableV2 private[delta](
       // Catalog based tables need a SubqueryAlias that carries their fully-qualified name
       SubqueryAlias(ct.identifier.nameParts, child)
     }
-    DataFrameUtils.ofRows(sparkSession, plan)
+    Dataset.ofRows(sparkSession, plan)
   }
 
   /** Creates a [[DataFrame]] that reads from this table */

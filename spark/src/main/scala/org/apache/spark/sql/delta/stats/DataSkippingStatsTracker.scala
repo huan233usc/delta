@@ -183,7 +183,7 @@ class DeltaJobStatisticsTracker(
     @transient val path: Path,
     val dataCols: Seq[Attribute],
     val statsColExpr: Expression
-) extends WriteJobStatsTracker with EvalHelper {
+) extends WriteJobStatsTracker {
 
   var recordedStats: Map[String, String] = _
 
@@ -193,7 +193,7 @@ class DeltaJobStatisticsTracker(
   override def newTaskInstance(): WriteTaskStatsTracker = {
     val rootPath = new Path(rootUri)
     val hadoopConf = srlHadoopConf.value
-    new DeltaTaskStatisticsTracker(dataCols, prepareForEval(statsColExpr), rootPath, hadoopConf)
+    new DeltaTaskStatisticsTracker(dataCols, statsColExpr, rootPath, hadoopConf)
   }
 
   override def processStats(stats: Seq[WriteTaskStats], jobCommitTime: Long): Unit = {

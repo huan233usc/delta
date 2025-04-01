@@ -473,8 +473,7 @@ object RedirectFeature {
     val catalogTableOpt = redirectConfig.spec match {
       case pathRedirect: PathBasedRedirectSpec =>
         withUpdateTableRedirectDDL(updateTableRedirectDDL = true) {
-          val analyzer = spark.sessionState.analyzer
-          import analyzer.CatalogAndIdentifier
+          import spark.sessionState.analyzer.CatalogAndIdentifier
           val CatalogAndIdentifier(catalog, ident) = Seq("delta", pathRedirect.destPath)
           catalog.asTableCatalog.loadTable(ident).asInstanceOf[DeltaTableV2].catalogTable
         }

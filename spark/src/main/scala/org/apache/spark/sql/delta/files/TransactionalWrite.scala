@@ -313,7 +313,7 @@ trait TransactionalWrite extends DeltaLogging { self: OptimisticTransactionImpl 
   protected def getStatsColExpr(
       statsDataSchema: Seq[Attribute],
       statsCollection: StatisticsCollection): (Expression, Seq[Attribute]) = {
-    val resolvedPlan = DataFrameUtils.ofRows(spark, LocalRelation(statsDataSchema))
+    val resolvedPlan = Dataset.ofRows(spark, LocalRelation(statsDataSchema))
       .select(to_json(statsCollection.statsCollector))
       .queryExecution.analyzed
 
@@ -518,13 +518,10 @@ trait TransactionalWrite extends DeltaLogging { self: OptimisticTransactionImpl 
     }
 
     // add [[AddFile.Tags.ICEBERG_COMPAT_VERSION.name]] tags to addFiles
-    // starting from IcebergCompatV2
-    val enabledCompat = IcebergCompat.anyEnabled(metadata)
-    if (enabledCompat.exists(_.version >= 2)) {
+    if (IcebergCompatV2.isEnabled(metadata)) {
       resultFiles = resultFiles.map { addFile =>
-        addFile.copy(tags = Option(addFile.tags).getOrElse(Map.empty[String, String]) +
-          (AddFile.Tags.ICEBERG_COMPAT_VERSION.name -> enabledCompat.get.version.toString)
-        )
+        val tags = if (addFile.tags != null) addFile.tags else Map.empty[String, String]
+        addFile.copy(tags = tags + (AddFile.Tags.ICEBERG_COMPAT_VERSION.name -> "2"))
       }
     }
 

@@ -41,7 +41,6 @@ import org.apache.spark.internal.MDC
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Expression, Literal}
-import org.apache.spark.sql.catalyst.plans.logical.LocalRelation
 import org.apache.spark.sql.connector.read.streaming
 import org.apache.spark.sql.connector.read.streaming.{ReadAllAvailable, ReadLimit, ReadMaxFiles, SupportsAdmissionControl, SupportsTriggerAvailableNow}
 import org.apache.spark.sql.execution.streaming._
@@ -226,18 +225,18 @@ trait DeltaSourceBase extends Source
   @volatile protected var hasCheckedReadIncompatibleSchemaChangesOnStreamStart: Boolean = false
 
   override val schema: StructType = {
+    val readSchema = DeltaTableUtils.removeInternalWriterMetadata(spark, readSchemaAtSourceInit)
     val readSchemaWithCdc = if (options.readChangeFeed) {
-      CDCReader.cdcReadSchema(readSchemaAtSourceInit)
+      CDCReader.cdcReadSchema(readSchema)
     } else {
-      readSchemaAtSourceInit
+      readSchema
     }
-    DeltaTableUtils.removeInternalDeltaMetadata(
-      spark, DeltaTableUtils.removeInternalWriterMetadata(spark, readSchemaWithCdc))
+    DeltaTableUtils.removeInternalDeltaMetadata(spark, readSchemaWithCdc)
   }
 
   // A dummy empty dataframe that can be returned at various point during streaming
-  protected val emptyDataFrame: DataFrame =
-    DataFrameUtils.ofRows(spark, LocalRelation(schema).copy(isStreaming = true))
+  protected val emptyDataFrame: DataFrame = spark.sqlContext.internalCreateDataFrame(
+    spark.sparkContext.emptyRDD[InternalRow], schema, isStreaming = true)
 
   /**
    * When `AvailableNow` is used, this offset will be the upper bound where this run of the query

@@ -18,7 +18,7 @@ package io.delta.tables
 
 import scala.collection.mutable
 
-import org.apache.spark.sql.delta.{DeltaErrors, DeltaTableUtils, TableSpecUtils}
+import org.apache.spark.sql.delta.{DeltaErrors, DeltaTableUtils}
 import org.apache.spark.sql.delta.DeltaTableUtils.withActiveSession
 import org.apache.spark.sql.delta.sources.DeltaSQLConf
 import io.delta.tables.execution._
@@ -357,11 +357,15 @@ class DeltaTableBuilder private[tables](
       DeltaTableUtils.parseColsToClusterByTransform(colNames)
     })
 
-    val tableSpec = TableSpecUtils.create(
+    val tableSpec = org.apache.spark.sql.catalyst.plans.logical.TableSpec(
       properties = properties,
       provider = Some(FORMAT_NAME),
+      options = Map.empty,
       location = location,
-      comment = tblComment)
+      serde = None,
+      comment = tblComment,
+      external = false
+    )
 
     val stmt = builderOption match {
       case CreateTableOptions(ifNotExists) =>

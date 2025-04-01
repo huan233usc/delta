@@ -42,7 +42,6 @@ class DeltaAnalysisException(
     cause = cause)
   with DeltaThrowable {
   def getMessageParametersArray: Array[String] = messageParameters
-  override def getErrorClass: String = errorClass
 }
 
 class DeltaIllegalArgumentException(
@@ -86,9 +85,7 @@ class DeltaParseException(
       ParserUtils.position(ctx.getStop),
       errorClass,
       messageParameters
-    ) with DeltaThrowable {
-  override def getErrorClass: String = errorClass
-}
+    ) with DeltaThrowable
 
 class DeltaArithmeticException(
     errorClass: String,

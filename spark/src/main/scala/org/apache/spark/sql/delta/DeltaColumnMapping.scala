@@ -491,8 +491,7 @@ trait DeltaColumnMappingBase extends DeltaLogging {
         field.copy(metadata = builder.build())
       })
 
-    // Starting from IcebergCompatV2, we require writing field-id for List/Map nested fields
-    val (finalSchema, newMaxId) = if (IcebergCompat.isGeqEnabled(newMetadata, 2)) {
+    val (finalSchema, newMaxId) = if (IcebergCompatV2.isEnabled(newMetadata)) {
       rewriteFieldIdsForIceberg(newSchema, maxId)
     } else {
       (newSchema, maxId)

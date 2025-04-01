@@ -1307,11 +1307,8 @@ trait DeltaAlterTableTests extends DeltaAlterTableTestBase {
       val ex = intercept[AnalysisException] {
         sql(s"ALTER TABLE $tableName CHANGE COLUMN v1 v1 integer AFTER unknown")
       }
-      checkExceptionMessage(
-        ex,
-        "Missing field unknown",
-        "Couldn't resolve positional argument AFTER unknown",
-        "A column, variable, or function parameter with name `unknown` cannot be resolved")
+      assert(ex.getMessage.contains("Missing field unknown") ||
+        ex.getMessage.contains("Couldn't resolve positional argument AFTER unknown"))
     }
   }
 
@@ -1323,11 +1320,8 @@ trait DeltaAlterTableTests extends DeltaAlterTableTestBase {
       val ex = intercept[AnalysisException] {
         sql(s"ALTER TABLE $tableName CHANGE COLUMN struct.v1 v1 integer AFTER unknown")
       }
-      checkExceptionMessage(
-        ex,
-        "Missing field struct.unknown",
-        "Couldn't resolve positional argument AFTER unknown",
-        "A column, variable, or function parameter with name `struct`.`unknown` cannot be resolved")
+      assert(ex.getMessage.contains("Missing field struct.unknown") ||
+        ex.getMessage.contains("Couldn't resolve positional argument AFTER unknown"))
     }
   }
 
@@ -1519,10 +1513,6 @@ trait DeltaAlterTableTests extends DeltaAlterTableTestBase {
     }
   }
 
-  private def checkExceptionMessage(e: AnalysisException, messages: String*): Unit = {
-    assert(messages.exists(e.getMessage.contains), s"${e.getMessage} did not contain $messages")
-  }
-
   test("CHANGE COLUMN - move unknown column") {
     val df = Seq((1, "a"), (2, "b")).toDF("v1", "v2")
     withDeltaTable(df) { tableName =>
@@ -1530,11 +1520,8 @@ trait DeltaAlterTableTests extends DeltaAlterTableTestBase {
       val ex = intercept[AnalysisException] {
         sql(s"ALTER TABLE $tableName CHANGE COLUMN unknown unknown string FIRST")
       }
-      checkExceptionMessage(
-        ex,
-        "Missing field unknown",
-        "Cannot update missing field unknown",
-        "A column, variable, or function parameter with name `unknown` cannot be resolved")
+      assert(ex.getMessage.contains("Missing field unknown") ||
+        ex.getMessage.contains("Cannot update missing field unknown"))
     }
   }
 
@@ -1546,11 +1533,8 @@ trait DeltaAlterTableTests extends DeltaAlterTableTestBase {
       val ex = intercept[AnalysisException] {
         sql(s"ALTER TABLE $tableName CHANGE COLUMN struct.unknown unknown string FIRST")
       }
-      checkExceptionMessage(
-        ex,
-        "Missing field struct.unknown",
-        "Cannot update missing field struct.unknown",
-        "A column, variable, or function parameter with name `struct`.`unknown` cannot be resolved")
+      assert(ex.getMessage.contains("Missing field struct.unknown") ||
+        ex.getMessage.contains("Cannot update missing field struct.unknown"))
     }
   }
 
@@ -1604,11 +1588,8 @@ trait DeltaAlterTableTests extends DeltaAlterTableTestBase {
         val ex1 = intercept[AnalysisException] {
           sql(s"ALTER TABLE $tableName CHANGE COLUMN V1 V1 integer")
         }
-        checkExceptionMessage(
-          ex1,
-          "Missing field V1",
-          "Cannot update missing field V1",
-          "A column, variable, or function parameter with name `V1` cannot be resolved.")
+        assert(ex1.getMessage.contains("Missing field V1") ||
+          ex1.getMessage.contains("Cannot update missing field V1"))
 
         val ex2 = intercept[ParseException] {
           sql(s"ALTER TABLE $tableName CHANGE COLUMN v1 V1 integer")
@@ -1618,12 +1599,8 @@ trait DeltaAlterTableTests extends DeltaAlterTableTestBase {
         val ex3 = intercept[AnalysisException] {
           sql(s"ALTER TABLE $tableName CHANGE COLUMN v1 v1 integer AFTER V2")
         }
-        checkExceptionMessage(
-          ex2,
-          "Missing field V2",
-          "Couldn't resolve positional argument AFTER V2",
-          "Renaming column is not supported in Hive-style ALTER COLUMN, " +
-            "please run RENAME COLUMN instead")
+        assert(ex3.getMessage.contains("Missing field V2") ||
+          ex3.getMessage.contains("Couldn't resolve positional argument AFTER V2"))
 
         val ex4 = intercept[AnalysisException] {
           sql(s"ALTER TABLE $tableName CHANGE COLUMN s s struct<V1:integer,v2:string> AFTER v2")

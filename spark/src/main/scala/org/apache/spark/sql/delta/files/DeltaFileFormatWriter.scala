@@ -18,7 +18,6 @@ package org.apache.spark.sql.delta.files
 
 import java.util.{Date, UUID}
 
-import org.apache.spark.sql.delta.ClassicColumnConversions._
 import org.apache.spark.sql.delta.DeltaOptions
 import org.apache.spark.sql.delta.logging.DeltaLogKeys
 import org.apache.spark.sql.delta.util.{Utils => DeltaUtils}
