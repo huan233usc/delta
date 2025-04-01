@@ -255,15 +255,20 @@ public class TransactionImpl implements Transaction {
     checkState(!closed, "Transaction is already attempted to commit. Create a new transaction.");
     TransactionMetrics transactionMetrics = new TransactionMetrics();
     try {
-      TransactionCommitResult result =
+      long committedVersion =
           transactionMetrics.totalCommitTimer.time(
               () -> commitWithRetry(engine, dataActions, transactionMetrics));
       recordTransactionReport(
           engine,
-          Optional.of(result.getVersion()) /* committedVersion */,
+          Optional.of(committedVersion),
           transactionMetrics,
           Optional.empty() /* exception */);
-      return result;
+      TransactionMetricsResult txnMetricsCaptured =
+          transactionMetrics.captureTransactionMetricsResult();
+      return new TransactionCommitResult(
+          committedVersion,
+          generatePostCommitHooks(committedVersion, txnMetricsCaptured),
+          txnMetricsCaptured);
     } catch (Exception e) {
       recordTransactionReport(
           engine,
@@ -274,7 +279,7 @@ public class TransactionImpl implements Transaction {
     }
   }
 
-  private TransactionCommitResult commitWithRetry(
+  private long commitWithRetry(
       Engine engine, CloseableIterable<Row> dataActions, TransactionMetrics transactionMetrics) {
     try {
       long commitAsVersion = readSnapshot.getVersion() + 1;
@@ -397,7 +402,7 @@ public class TransactionImpl implements Transaction {
     return attemptInCommitTimestamp;
   }
 
-  private TransactionCommitResult doCommit(
+  private long doCommit(
       Engine engine,
       long commitAsVersion,
       CommitInfo attemptCommitInfo,
@@ -468,16 +473,7 @@ public class TransactionImpl implements Transaction {
           "Write file actions to JSON log file `%s`",
           FileNames.deltaFile(logPath, commitAsVersion));
 
-      List<PostCommitHook> postCommitHooks = new ArrayList<>();
-      if (isReadyForCheckpoint(commitAsVersion)) {
-        postCommitHooks.add(new CheckpointHook(dataPath, commitAsVersion));
-      }
-
-      buildPostCommitCrcInfoIfCurrentCrcAvailable(
-              commitAsVersion, transactionMetrics.captureTransactionMetricsResult())
-          .ifPresent(crcInfo -> postCommitHooks.add(new ChecksumSimpleHook(crcInfo, logPath)));
-
-      return new TransactionCommitResult(commitAsVersion, postCommitHooks);
+      return commitAsVersion;
     } catch (FileAlreadyExistsException e) {
       throw e;
     } catch (IOException ioe) {
@@ -489,6 +485,19 @@ public class TransactionImpl implements Transaction {
     // For now, Kernel just supports blind append.
     // Change this when read-after-write is supported.
     return true;
+  }
+
+  private List<PostCommitHook> generatePostCommitHooks(
+      long committedVersion, TransactionMetricsResult txnMetrics) {
+    List<PostCommitHook> postCommitHooks = new ArrayList<>();
+    if (isReadyForCheckpoint(committedVersion)) {
+      postCommitHooks.add(new CheckpointHook(dataPath, committedVersion));
+    }
+
+    buildPostCommitCrcInfoIfCurrentCrcAvailable(committedVersion, txnMetrics)
+        .ifPresent(crcInfo -> postCommitHooks.add(new ChecksumSimpleHook(crcInfo, logPath)));
+
+    return postCommitHooks;
   }
 
   /**
