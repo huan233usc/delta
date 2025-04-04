@@ -36,6 +36,7 @@ import io.delta.kernel.internal.actions.*;
 import io.delta.kernel.internal.annotation.VisibleForTesting;
 import io.delta.kernel.internal.checksum.CRCInfo;
 import io.delta.kernel.internal.checksum.ChecksumReader;
+import io.delta.kernel.internal.clustering.ClusteringUtils;
 import io.delta.kernel.internal.data.TransactionStateRow;
 import io.delta.kernel.internal.fs.Path;
 import io.delta.kernel.internal.hook.CheckpointHook;
@@ -80,6 +81,7 @@ public class TransactionImpl implements Transaction {
   private final Protocol protocol;
   private final SnapshotImpl readSnapshot;
   private final Optional<SetTransaction> setTxnOpt;
+  private final List<Column> clusteringColumns;
   private final boolean shouldUpdateProtocol;
   private final Clock clock;
   private final Map<String, DomainMetadata> domainMetadatasAdded = new HashMap<>();
@@ -102,6 +104,7 @@ public class TransactionImpl implements Transaction {
       Protocol protocol,
       Metadata metadata,
       Optional<SetTransaction> setTxnOpt,
+      List<Column> clusteringColumns,
       boolean shouldUpdateMetadata,
       boolean shouldUpdateProtocol,
       int maxRetries,
@@ -115,6 +118,7 @@ public class TransactionImpl implements Transaction {
     this.protocol = protocol;
     this.metadata = metadata;
     this.setTxnOpt = setTxnOpt;
+    this.clusteringColumns = clusteringColumns;
     this.shouldUpdateMetadata = shouldUpdateMetadata;
     this.shouldUpdateProtocol = shouldUpdateProtocol;
     this.maxRetries = maxRetries;
@@ -201,7 +205,7 @@ public class TransactionImpl implements Transaction {
     if (domainMetadatas.isPresent()) {
       return domainMetadatas.get();
     }
-
+    generateClusteringDomainMetadataIfNeeded();
     if (domainMetadatasAdded.isEmpty() && domainMetadatasRemoved.isEmpty()) {
       // If no domain metadatas are added or removed, return an empty list. This is to avoid
       // unnecessary loading of the domain metadatas from the snapshot (which is an expensive
@@ -587,6 +591,18 @@ public class TransactionImpl implements Transaction {
                     lastCrcInfo.getTableSizeBytes() + metricsResult.getTotalAddFilesSizeInBytes(),
                     lastCrcInfo.getNumFiles() + metricsResult.getNumAddFiles(),
                     Optional.of(txnId.toString())));
+  }
+
+  /**
+   * Generate the domain metadata for the clustering columns if they are present in the transaction.
+   */
+  private void generateClusteringDomainMetadataIfNeeded() {
+    if (TableFeatures.isClusteringTableFeatureSupported(protocol) && !clusteringColumns.isEmpty()) {
+      DomainMetadata clusteringDomainMetadata =
+          ClusteringUtils.getClusteringDomainMetadata(clusteringColumns);
+      addDomainMetadataInternal(
+          clusteringDomainMetadata.getDomain(), clusteringDomainMetadata.getConfiguration());
+    }
   }
 
   /**
