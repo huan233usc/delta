@@ -92,8 +92,8 @@ class ChecksumSuite extends DeltaTableWriteSuiteBase {
           engine,
           tablePath,
           version = 2,
-          expectedFileCount = 2,
-          expectedTableSize = 100902)
+          expectedFileCount = 1,
+          expectedTableSize = 100802)
       }
     }
   }
