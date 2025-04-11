@@ -257,7 +257,13 @@ public class TransactionImpl implements Transaction {
   public TransactionCommitResult commit(Engine engine, CloseableIterable<Row> dataActions)
       throws ConcurrentWriteException {
     checkState(!closed, "Transaction is already attempted to commit. Create a new transaction.");
-    TransactionMetrics transactionMetrics = new TransactionMetrics();
+    // For a new table or when fileSizeHistogram is available in the CRC of the readSnapshot
+    // we update it in the commit. When it is not available we do nothing.
+    TransactionMetrics transactionMetrics =
+        isNewTable
+            ? TransactionMetrics.forNewTable()
+            : TransactionMetrics.withExistingTableFileSizeHistogram(
+                readSnapshot.getCurrentCrcInfo().flatMap(CRCInfo::getFileSizeHistogram));
     try {
       long committedVersion =
           transactionMetrics.totalCommitTimer.time(
@@ -332,6 +338,9 @@ public class TransactionImpl implements Transaction {
             commitAsVersion = rebaseState.getLatestVersion() + 1;
             dataActions = rebaseState.getUpdatedDataActions();
             domainMetadatas = Optional.of(rebaseState.getUpdatedDomainMetadatas());
+            // Action counters may be partially incremented from previous tries, reset the counters
+            // to 0 and drop fileSizeHistogram
+            transactionMetrics.resetActionMetricsForRetry();
           }
         }
         numTries++;
@@ -448,8 +457,6 @@ public class TransactionImpl implements Transaction {
         }
       }
 
-      // Action counters may be partially incremented from previous tries, reset the counters to 0
-      transactionMetrics.resetCounters();
       boolean isAppendOnlyTable = APPEND_ONLY_ENABLED.fromMetadata(metadata);
 
       // Write the staged data to a delta file
@@ -488,17 +495,12 @@ public class TransactionImpl implements Transaction {
   private void incrementMetricsForFileActionRow(TransactionMetrics txnMetrics, Row fileActionRow) {
     txnMetrics.totalActionsCounter.increment();
     if (!fileActionRow.isNullAt(ADD_FILE_ORDINAL)) {
-      txnMetrics.addFilesCounter.increment();
-      txnMetrics.addFilesSizeInBytesCounter.increment(
-          new AddFile(fileActionRow.getStruct(ADD_FILE_ORDINAL)).getSize());
-      // TODO increment fileSizeHistogram
+      txnMetrics.updateForAddFile(new AddFile(fileActionRow.getStruct(ADD_FILE_ORDINAL)).getSize());
     } else if (!fileActionRow.isNullAt(REMOVE_FILE_ORDINAL)) {
-      txnMetrics.removeFilesCounter.increment();
       RemoveFile removeFile = new RemoveFile(fileActionRow.getStruct(REMOVE_FILE_ORDINAL));
-      long fileSize =
+      long removeFileSize =
           removeFile.getSize().orElseThrow(DeltaErrorsInternal::missingRemoveFileSizeDuringCommit);
-      txnMetrics.removeFilesSizeInBytesCounter.increment(fileSize);
-      // TODO decrement fileSizeHistogram
+      txnMetrics.updateForRemoveFile(removeFileSize);
     }
   }
 
@@ -585,6 +587,8 @@ public class TransactionImpl implements Transaction {
   private Optional<CRCInfo> buildPostCommitCrcInfoIfCurrentCrcAvailable(
       long commitAtVersion, TransactionMetricsResult metricsResult) {
     if (isNewTable) {
+      // We don't need to worry about conflicting transaction here since new tables always commit
+      // metadata (and thus fail any conflicts)
       return Optional.of(
           new CRCInfo(
               commitAtVersion,
@@ -592,7 +596,9 @@ public class TransactionImpl implements Transaction {
               protocol,
               metricsResult.getTotalAddFilesSizeInBytes(),
               metricsResult.getNumAddFiles(),
-              Optional.of(txnId.toString())));
+              Optional.of(txnId.toString()),
+              Optional.empty() // once we support writing CRC populate here
+              ));
     }
 
     return currentCrcInfo
@@ -607,7 +613,9 @@ public class TransactionImpl implements Transaction {
                     // TODO: handle RemoveFiles for calculating table size and num of files.
                     lastCrcInfo.getTableSizeBytes() + metricsResult.getTotalAddFilesSizeInBytes(),
                     lastCrcInfo.getNumFiles() + metricsResult.getNumAddFiles(),
-                    Optional.of(txnId.toString())));
+                    Optional.of(txnId.toString()),
+                    Optional.empty() // once we support writing CRC populate here
+                    ));
   }
 
   /**
