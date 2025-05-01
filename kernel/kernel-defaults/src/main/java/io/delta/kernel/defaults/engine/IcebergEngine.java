@@ -21,7 +21,7 @@ public class IcebergEngine implements Engine {
 
     public IcebergEngine(Engine delegateEngine, Configuration hadoopConf) {
         this.delegate = delegateEngine;
-        this.deltaLogSimulatingFS = new IcebergFileSystemClient(delegateEngine.getFileSystemClient());
+        this.deltaLogSimulatingFS = new IcebergFileSystemClient(delegateEngine.getFileSystemClient(), hadoopConf);
     }
 
 
@@ -66,7 +66,8 @@ public class IcebergEngine implements Engine {
                 return baseFs.listFrom(filePath);
             }
             BaseTable icebergTable = (BaseTable) hadoopCatalog.load(filePath.substring(0, filePath.length() -"/_delta_log".length()));
-            icebergTable.operations().current().metadataFileLocation()
+            long version = getVersionFromIcebergMetadataFile(icebergTable.operations().current().metadataFileLocation());
+            
         }
 
         @Override
@@ -89,5 +90,24 @@ public class IcebergEngine implements Engine {
             return baseFs.delete(path);
         }
 
+    }
+
+    public static long getVersionFromIcebergMetadataFile(String icebergMetadataFileName) {
+        // Validate and extract version from Iceberg metadata file name
+        if (!icebergMetadataFileName.matches("v\\d+\\.metadata\\.json")) {
+            throw new IllegalArgumentException(
+                    "Invalid Iceberg metadata file name: " + icebergMetadataFileName);
+        }
+
+        // Extract version number (remove 'v' prefix and '.metadata.json' suffix)
+        String versionStr = icebergMetadataFileName
+                .substring(1, icebergMetadataFileName.indexOf(".metadata.json"));
+
+        try {
+            return Long.parseLong(versionStr);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(
+                    "Could not parse version number from " + icebergMetadataFileName, e);
+        }
     }
 }
