@@ -4,7 +4,8 @@ package io.delta.kernel.defaults.engine;
 import io.delta.kernel.engine.*;
 import io.delta.kernel.utils.CloseableIterator;
 import io.delta.kernel.utils.FileStatus;
-import org.apache.iceberg.Table;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.iceberg.BaseTable;
 import org.apache.iceberg.hadoop.HadoopTables;
 
 import java.io.ByteArrayInputStream;
@@ -18,7 +19,7 @@ public class IcebergEngine implements Engine {
     private final FileSystemClient deltaLogSimulatingFS;
 
 
-    public IcebergEngine(Engine delegateEngine) {
+    public IcebergEngine(Engine delegateEngine, Configuration hadoopConf) {
         this.delegate = delegateEngine;
         this.deltaLogSimulatingFS = new IcebergFileSystemClient(delegateEngine.getFileSystemClient());
     }
@@ -52,14 +53,20 @@ public class IcebergEngine implements Engine {
     private class IcebergFileSystemClient implements FileSystemClient {
 
         private final FileSystemClient baseFs;
+        private final HadoopTables hadoopCatalog;
 
-        IcebergFileSystemClient(FileSystemClient baseFs) {
+        IcebergFileSystemClient(FileSystemClient baseFs, Configuration hadoopConf) {
             this.baseFs = baseFs;
+            this.hadoopCatalog = new HadoopTables(hadoopConf);
         }
 
         @Override
         public CloseableIterator<FileStatus> listFrom(String filePath) throws IOException {
-            return baseFs.listFrom(filePath);
+            if(!filePath.contains("/_delta_log")){
+                return baseFs.listFrom(filePath);
+            }
+            BaseTable icebergTable = (BaseTable) hadoopCatalog.load(filePath.substring(0, filePath.length() -"/_delta_log".length()));
+            icebergTable.operations().current().metadataFileLocation()
         }
 
         @Override
@@ -82,9 +89,5 @@ public class IcebergEngine implements Engine {
             return baseFs.delete(path);
         }
 
-        private void generateDeltaLogFromIceberg(String tablePath) {
-            Table table = new HadoopTables().load(tablePath);
-
-        }
     }
 }
