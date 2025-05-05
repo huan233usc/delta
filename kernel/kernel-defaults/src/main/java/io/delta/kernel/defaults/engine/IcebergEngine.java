@@ -1,16 +1,27 @@
 package io.delta.kernel.defaults.engine;
 
 
+import io.delta.kernel.data.Row;
 import io.delta.kernel.engine.*;
+import io.delta.kernel.internal.actions.Metadata;
+import io.delta.kernel.internal.actions.SingleAction;
+import io.delta.kernel.internal.fs.Path;
+import io.delta.kernel.internal.util.FileNames;
 import io.delta.kernel.utils.CloseableIterator;
 import io.delta.kernel.utils.FileStatus;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.iceberg.BaseTable;
+import org.apache.iceberg.Table;
+import org.apache.iceberg.Transaction;
+import org.apache.iceberg.catalog.Catalog;
+import org.apache.iceberg.exceptions.NotFoundException;
 import org.apache.iceberg.hadoop.HadoopTables;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 public class IcebergEngine implements Engine {
 
@@ -18,10 +29,13 @@ public class IcebergEngine implements Engine {
 
     private final FileSystemClient deltaLogSimulatingFS;
 
+    private final Configuration hadoopConf;
+
 
     public IcebergEngine(Engine delegateEngine, Configuration hadoopConf) {
         this.delegate = delegateEngine;
-        this.deltaLogSimulatingFS = new IcebergFileSystemClient(delegateEngine.getFileSystemClient(), hadoopConf);
+        this.deltaLogSimulatingFS = delegateEngine.getFileSystemClient();
+        this.hadoopConf =hadoopConf;
     }
 
 
@@ -32,7 +46,7 @@ public class IcebergEngine implements Engine {
 
     @Override
     public JsonHandler getJsonHandler() {
-        return delegate.getJsonHandler();
+        return new IcebergJsonHandler(delegate.getJsonHandler(), hadoopConf);
     }
 
     @Override
@@ -50,64 +64,86 @@ public class IcebergEngine implements Engine {
         return delegate.getMetricsReporters();
     }
 
-    private class IcebergFileSystemClient implements FileSystemClient {
+    /**
+     * Custom JsonHandler that intercepts Delta JSON writes to create Iceberg commits.
+     */
+    private static class IcebergJsonHandler implements JsonHandler {
+        private final JsonHandler base;
+        private final Configuration hadoopConf;
+        private final HadoopTables tables;
 
-        private final FileSystemClient baseFs;
-        private final HadoopTables hadoopCatalog;
-
-        IcebergFileSystemClient(FileSystemClient baseFs, Configuration hadoopConf) {
-            this.baseFs = baseFs;
-            this.hadoopCatalog = new HadoopTables(hadoopConf);
+        public IcebergJsonHandler(JsonHandler base, Configuration conf) {
+            this.base = base;
+            this.hadoopConf = conf;
+            this.tables = new HadoopTables(conf);
         }
 
         @Override
-        public CloseableIterator<FileStatus> listFrom(String filePath) throws IOException {
-            if(!filePath.contains("/_delta_log")){
-                return baseFs.listFrom(filePath);
+        public void writeJsonFileAtomically(String filePath, CloseableIterator<Row> data, boolean overwrite)
+                throws IOException {
+            if (filePath.contains("/_delta_log/")) {
+                try {
+                    // Collect all rows representing actions
+                    List<Row> actions = new ArrayList<>();
+                    while (data.hasNext()) {
+                        actions.add(data.next());
+                    }
+                    data.close();
+                    String tablePath = filePath.split("/_delta_log/")[0];
+                    // Load or create the Iceberg table
+
+                    boolean tableExists = tables.exists(tablePath);
+                    Transaction icebergTransaction;
+
+                    if(tableExists) {
+                        icebergTransaction = tables.load(tablePath).newTransaction();
+                    } else {
+                       Optional<Row> rowWithMetadata = actions.stream().filter(
+                                row -> !row.isNullAt(SingleAction.METADATA_ORDINAL)
+                        ).findFirst();
+                       Metadata metadata = Metadata.fromRow(rowWithMetadata.get().getStruct(SingleAction.METADATA_ORDINAL));
+                       metadata.getSchema()
+
+                        Catalog.TableBuilder builder = tables.buildTable(
+                                tablePath,
+                        )
+
+                    }
+
+                } catch (Exception e) {
+                    throw new IOException("Failed to apply Delta commit to Iceberg table: " + e.getMessage(), e);
+                }
+            } else {
+                // Delegate other JSON writes (if any)
+                base.writeJsonFileAtomically(filePath, data, overwrite);
             }
-            BaseTable icebergTable = (BaseTable) hadoopCatalog.load(filePath.substring(0, filePath.length() -"/_delta_log".length()));
-            long version = getVersionFromIcebergMetadataFile(icebergTable.operations().current().metadataFileLocation());
-            
         }
 
         @Override
-        public String resolvePath(String path) throws IOException {
-            return baseFs.resolvePath(path);
+        public io.delta.kernel.engine.ColumnarBatch parseJson(io.delta.kernel.engine.ColumnVector jsonStringVector,
+                                                              io.delta.kernel.engine.StructType outputSchema,
+                                                              Optional<io.delta.kernel.engine.ColumnVector> selectionVector) {
+            // Delegate JSON parsing to base
+            return base.parseJson(jsonStringVector, outputSchema, selectionVector);
         }
 
         @Override
-        public CloseableIterator<ByteArrayInputStream> readFiles(CloseableIterator<FileReadRequest> readRequests) throws IOException {
-            return baseFs.readFiles(readRequests);
+        public io.delta.kernel.engine.StructType deserializeStructType(String structTypeJson) {
+            return base.deserializeStructType(structTypeJson);
         }
 
         @Override
-        public boolean mkdirs(String path) throws IOException {
-            return baseFs.mkdirs(path);
+        public CloseableIterator<io.delta.kernel.engine.ColumnarBatch> readJsonFiles(
+                CloseableIterator<FileStatus> fileIter,
+                io.delta.kernel.engine.StructType physicalSchema,
+                Optional<io.delta.kernel.engine.Predicate> predicate) throws IOException {
+            return base.readJsonFiles(fileIter, physicalSchema, predicate);
         }
 
-        @Override
-        public boolean delete(String path) throws IOException {
-            return baseFs.delete(path);
-        }
-
-    }
-
-    public static long getVersionFromIcebergMetadataFile(String icebergMetadataFileName) {
-        // Validate and extract version from Iceberg metadata file name
-        if (!icebergMetadataFileName.matches("v\\d+\\.metadata\\.json")) {
-            throw new IllegalArgumentException(
-                    "Invalid Iceberg metadata file name: " + icebergMetadataFileName);
-        }
-
-        // Extract version number (remove 'v' prefix and '.metadata.json' suffix)
-        String versionStr = icebergMetadataFileName
-                .substring(1, icebergMetadataFileName.indexOf(".metadata.json"));
-
-        try {
-            return Long.parseLong(versionStr);
-        } catch (NumberFormatException e) {
-            throw new IllegalArgumentException(
-                    "Could not parse version number from " + icebergMetadataFileName, e);
+        // Fallback parseJson without selectionVector
+        public io.delta.kernel.engine.ColumnarBatch parseJson(io.delta.kernel.engine.ColumnVector jsonStringVector,
+                                                              io.delta.kernel.engine.StructType outputSchema) {
+            return base.parseJson(jsonStringVector, outputSchema, Optional.empty());
         }
     }
 }
