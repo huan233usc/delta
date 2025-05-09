@@ -208,6 +208,7 @@ trait FileReadMetrics { self: Object =>
 
   def collectReadFiles(fileIter: CloseableIterator[FileStatus]): CloseableIterator[FileStatus] = {
     fileIter.map(file => {
+      println("reading " + file.getPath.toString)
       updateVersionsRead(file)
       file
     })
