@@ -42,6 +42,8 @@ class MetricsReportSerializerSuite extends AnyFunSuite {
       snapshotReport.getSnapshotMetrics().getTimestampToVersionResolutionDurationNs())
     val loadProtocolAndMetadataDuration =
       snapshotReport.getSnapshotMetrics().getLoadInitialDeltaActionsDurationNs()
+    val loadDomainMetadataDuration =
+      snapshotReport.getSnapshotMetrics().getLoadDomainMetadataActionsDurationNs()
     val exception: Optional[String] = snapshotReport.getException().map(_.toString)
     val expectedJson =
       s"""
@@ -53,7 +55,8 @@ class MetricsReportSerializerSuite extends AnyFunSuite {
          |"providedTimestamp":${optionToString(snapshotReport.getProvidedTimestamp())},
          |"snapshotMetrics":{
          |"timestampToVersionResolutionDurationNs":${timestampToVersionResolutionDuration},
-         |"loadInitialDeltaActionsDurationNs":${loadProtocolAndMetadataDuration}
+         |"loadInitialDeltaActionsDurationNs":${loadProtocolAndMetadataDuration},
+         |"loadDomainMetadataActionsDurationNs":${loadDomainMetadataDuration}
          |}
          |}
          |""".stripMargin.replaceAll("\n", "")
@@ -64,6 +67,7 @@ class MetricsReportSerializerSuite extends AnyFunSuite {
     val snapshotContext1 = SnapshotQueryContext.forTimestampSnapshot("/table/path", 0)
     snapshotContext1.getSnapshotMetrics.timestampToVersionResolutionTimer.record(10)
     snapshotContext1.getSnapshotMetrics.loadInitialDeltaActionsTimer.record(1000)
+    snapshotContext1.getSnapshotMetrics.loadDomainMetadataActionsTimer.record(10000)
     snapshotContext1.setVersion(1)
     val exception = new RuntimeException("something something failed")
 
@@ -82,7 +86,8 @@ class MetricsReportSerializerSuite extends AnyFunSuite {
         |"providedTimestamp":0,
         |"snapshotMetrics":{
         |"timestampToVersionResolutionDurationNs":10,
-        |"loadInitialDeltaActionsDurationNs":1000
+        |"loadInitialDeltaActionsDurationNs":1000,
+        |"loadDomainMetadataActionsDurationNs":10000
         |}
         |}
         |""".stripMargin.replaceAll("\n", "")

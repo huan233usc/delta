@@ -167,10 +167,21 @@ public class LogReplay {
     // Lazy loading of domain metadata only when needed
     this.activeDomainMetadataMap =
         new Lazy<>(
-            () ->
-                loadDomainMetadataMap(engine).entrySet().stream()
-                    .filter(entry -> !entry.getValue().isRemoved())
-                    .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));
+            () -> {
+              Map<String, DomainMetadata> domainMetadataMap =
+                  snapshotMetrics.loadDomainMetadataActionsTimer.time(
+                      () ->
+                          loadDomainMetadataMap(engine).entrySet().stream()
+                              .filter(entry -> !entry.getValue().isRemoved())
+                              .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));
+              logger.info(
+                  "Loading domain metadata for {} at verision {} took {}ms",
+                  dataPath.toString(),
+                  logSegment.getVersion(),
+                  snapshotMetrics.loadDomainMetadataActionsTimer.totalDurationMs());
+              return domainMetadataMap;
+            });
+    ;
   }
 
   /////////////////
@@ -439,6 +450,8 @@ public class LogReplay {
    */
   private Map<String, DomainMetadata> loadDomainMetadataMapFromLog(
       Engine engine, Optional<Long> minLogVersion) {
+    long startTimeMillis = System.currentTimeMillis();
+    long actionsReadCount = 0;
     try (CloseableIterator<ActionWrapper> reverseIter =
         new ActionsIterator(
             engine,
@@ -450,6 +463,7 @@ public class LogReplay {
         final ActionWrapper nextElem = reverseIter.next();
         final long version = nextElem.getVersion();
         final ColumnarBatch columnarBatch = nextElem.getColumnarBatch();
+        actionsReadCount++;
         assert (columnarBatch.getSchema().equals(DOMAIN_METADATA_READ_SCHEMA));
 
         final ColumnVector dmVector = columnarBatch.getColumnVector(0);
@@ -461,6 +475,14 @@ public class LogReplay {
           break;
         }
       }
+      logger.info(
+          "{}: Took {}ms to loading domain metadata from log for version {}, "
+              + "read {} actions, using crc version {}",
+          dataPath.toString(),
+          System.currentTimeMillis() - startTimeMillis,
+          logSegment.getVersion(),
+          actionsReadCount,
+          minLogVersion.map(String::valueOf).orElse("N/A"));
       return domainMetadataMap;
     } catch (IOException ex) {
       throw new UncheckedIOException("Could not close iterator", ex);
