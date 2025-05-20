@@ -5,6 +5,9 @@ import org.apache.iceberg.Schema;
 import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types;
 
+import java.util.HashMap;
+import java.util.Map;
+
 /**
  * Utility class to convert Iceberg schemas to Delta Kernel schemas.
  */
@@ -44,18 +47,18 @@ public class IcebergToDeltaSchemaConverter {
         } else if (icebergType instanceof Types.DateType) {
             return DateType.DATE;
         } else if (icebergType instanceof Types.TimeType) {
-            throw new UnsupportedOperationException("Time t")
+            throw new UnsupportedOperationException("Time type is not supported");
         } else if (icebergType instanceof Types.TimestampType) {
             Types.TimestampType tsType = (Types.TimestampType) icebergType;
             if (tsType.shouldAdjustToUTC()) {
-                return new TimestampType();
+                return TimestampType.TIMESTAMP;
             } else {
-                return new TimestampNtzType();
+                return TimestampNTZType.TIMESTAMP_NTZ;
             }
         } else if (icebergType instanceof Types.StringType) {
-            return new StringType();
+            return StringType.STRING;
         } else if (icebergType instanceof Types.BinaryType) {
-            return new BinaryType();
+            return BinaryType.BINARY;
         } else if (icebergType instanceof Types.DecimalType) {
             Types.DecimalType decimalType = (Types.DecimalType) icebergType;
             return new DecimalType(decimalType.precision(), decimalType.scale());
@@ -78,21 +81,16 @@ public class IcebergToDeltaSchemaConverter {
 
             for (Types.NestedField field : structType.fields()) {
                 // Convert field metadata if necessary
-                FieldMetadata fieldMetadata = new FieldMetadata();
+                FieldMetadata.Builder fieldMetadata = new FieldMetadata.Builder();
 
                 // Add field ID to metadata
-                fieldMetadata = fieldMetadata.add("iceberg.field.id", String.valueOf(field.fieldId()));
-
-                // Add any other relevant field metadata here
-                if (field.doc() != null) {
-                    fieldMetadata = fieldMetadata.add("comment", field.doc());
-                }
+                fieldMetadata.putLong("delta.columnMapping.id", field.fieldId());
 
                 deltaStructType = deltaStructType.add(
                         field.name(),
                         convertType(field.type()),
                         !field.isRequired(),  // In Iceberg, isRequired() means non-nullable
-                        fieldMetadata
+                        fieldMetadata.build()
                 );
             }
 
@@ -100,6 +98,6 @@ public class IcebergToDeltaSchemaConverter {
         }
 
         // For any unhandled types, fall back to string
-        return new StringType();
+        return StringType.STRING;
     }
 }

@@ -40,8 +40,7 @@ public class IcebergBackedSnapshot implements Snapshot {
 
     @Override
     public StructType getSchema() {
-        icebergTable.schema()
-        return ;
+        return IcebergToDeltaSchemaConverter.toKernelSchema(icebergTable.schema());
     }
 
     @Override
