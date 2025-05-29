@@ -22,12 +22,17 @@ import io.delta.kernel.data.ColumnVector;
 import io.delta.kernel.data.ColumnarBatch;
 import io.delta.kernel.data.FilteredColumnarBatch;
 import io.delta.kernel.engine.Engine;
+import io.delta.kernel.internal.DeltaLogActionUtils;
 import io.delta.kernel.internal.actions.*;
 import io.delta.kernel.internal.fs.Path;
 import io.delta.kernel.internal.replay.CreateCheckpointIterator;
 import io.delta.kernel.internal.snapshot.LogSegment;
 import io.delta.kernel.internal.stats.FileSizeHistogram;
 import io.delta.kernel.internal.util.FileNames;
+import io.delta.kernel.types.StructType;
+import io.delta.kernel.utils.CloseableIterator;
+import io.delta.kernel.utils.FileStatus;
+import io.delta.kernel.utils.PeekableIterator;
 import java.io.IOException;
 import java.nio.file.FileAlreadyExistsException;
 import java.time.Instant;
@@ -37,6 +42,7 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/** Utility methods for computing and writing checksums for Delta tables. */
 public class ChecksumUtils {
 
   private ChecksumUtils() {}
@@ -49,6 +55,20 @@ public class ChecksumUtils {
   private static final int REMOVE_INDEX = CHECKPOINT_SCHEMA.indexOf("remove");
   private static final int DOMAIN_METADATA_INDEX = CHECKPOINT_SCHEMA.indexOf("domainMetadata");
   private static final int ADD_SIZE_INDEX = AddFile.FULL_SCHEMA.indexOf("size");
+  private static final int REMOVE_SIZE_INDEX = RemoveFile.FULL_SCHEMA.indexOf("size");
+
+  private static final Set<String> INCREMENTAL_SUPPORTED_OPS =
+      Collections.unmodifiableSet(
+          new HashSet<>(
+              Arrays.asList(
+                  "WRITE",
+                  "MERGE",
+                  "UPDATE",
+                  "DELETE",
+                  "OPTIMIZE",
+                  "CREATE TABLE AS SELECT", // CTAS
+                  "REPLACE TABLE AS SELECT", // RTAS
+                  "CREATE OR REPLACE TABLE AS SELECT")));
 
   /**
    * Computes the state of a Delta table and writes a checksum file for the provided snapshot's
@@ -89,8 +109,22 @@ public class ChecksumUtils {
       return;
     }
 
-    // TODO: Optimize using last available crc.
-    CRCInfo crcInfo = buildCrcInfoWithFullLogReplay(engine, logSegmentAtVersion);
+    Optional<CRCInfo> lastSeenCrcInfo =
+        logSegmentAtVersion
+            .getLastSeenChecksum()
+            .flatMap(file -> ChecksumReader.getCRCInfo(engine, file));
+    // Try to build CRC incrementally if possible
+    Optional<CRCInfo> incrementallyBuiltCrc =
+        lastSeenCrcInfo.isPresent()
+            ? buildCrcInfoIncrementally(lastSeenCrcInfo.get(), engine, logSegmentAtVersion)
+            : Optional.empty();
+
+    // Use incrementally built CRC if available, otherwise do full log replay
+    CRCInfo crcInfo =
+        incrementallyBuiltCrc.isPresent()
+            ? incrementallyBuiltCrc.get()
+            : buildCrcInfoWithFullLogReplay(engine, logSegmentAtVersion);
+
     ChecksumWriter checksumWriter = new ChecksumWriter(logSegmentAtVersion.getLogPath());
     try {
       checksumWriter.writeCheckSum(engine, crcInfo);
@@ -113,6 +147,7 @@ public class ChecksumUtils {
   private static CRCInfo buildCrcInfoWithFullLogReplay(
       Engine engine, LogSegment logSegmentAtVersion) throws IOException {
 
+    // Initialize state tracking
     StateTracker state = new StateTracker();
 
     // Process logs and update state
@@ -120,7 +155,6 @@ public class ChecksumUtils {
         new CreateCheckpointIterator(
             engine, logSegmentAtVersion, Instant.ofEpochMilli(Long.MAX_VALUE).toEpochMilli())) {
 
-      // Process all checkpoint batches
       while (checkpointIterator.hasNext()) {
         FilteredColumnarBatch filteredBatch = checkpointIterator.next();
         ColumnarBatch batch = filteredBatch.getData();
@@ -132,6 +166,7 @@ public class ChecksumUtils {
         ColumnVector removeVector = batch.getColumnVector(REMOVE_INDEX);
         ColumnVector addVector = batch.getColumnVector(ADD_INDEX);
         ColumnVector domainMetadataVector = batch.getColumnVector(DOMAIN_METADATA_INDEX);
+
         // Process all selected rows in a single pass for optimal performance
         for (int i = 0; i < rowCount; i++) {
           // Fields referenced in the lambda should be effectively final.
@@ -141,6 +176,7 @@ public class ChecksumUtils {
                   .map(vec -> !vec.isNullAt(rowId) && vec.getBoolean(rowId))
                   .orElse(true);
           if (!isSelected) continue;
+
           // Step 1: Ensure there are no remove records
           // We set minFileRetentionTimestampMillis to infinite future to skip all removed files,
           // so there should be no remove actions.
@@ -148,7 +184,8 @@ public class ChecksumUtils {
               removeVector.isNullAt(i),
               "unexpected remove row found when "
                   + "setting minFileRetentionTimestampMillis to infinite future");
-          // Step 2: Process add files, domain metadata, metadata, and protocol
+
+          // Process add files, domain metadata, metadata, and protocol
           processAddRecord(addVector, state, i);
           processDomainMetadataRecord(domainMetadataVector, state, i);
           processMetadataRecord(metadataVector, state, i);
@@ -156,6 +193,7 @@ public class ChecksumUtils {
         }
       }
     }
+
     // Get final metadata and protocol
     Metadata finalMetadata =
         state.metadataFromLog.orElseThrow(() -> new IllegalStateException("No metadata found"));
@@ -177,6 +215,104 @@ public class ChecksumUtils {
         Optional.of(state.addedFileSizeHistogram));
   }
 
+  private static Optional<CRCInfo> buildCrcInfoIncrementally(
+      CRCInfo lastSeenCrcInfo, Engine engine, LogSegment logSegment) throws IOException {
+    // Can only build incrementally if we have domain metadata and file size histogram
+    if (!lastSeenCrcInfo.getDomainMetadata().isPresent()) {
+      logger.info("Falling back to full replay: detected current crc missing domain metadata.");
+      return Optional.empty();
+    }
+    if (!lastSeenCrcInfo.getFileSizeHistogram().isPresent()) {
+      logger.info("Falling back to full replay: detected current crc missing file size histogram.");
+      return Optional.empty();
+    }
+
+    // Initialize state tracking
+    StateTracker state = new StateTracker();
+
+    // Create iterator for delta files newer than last CRC
+    try (CloseableIterator<ColumnarBatch> iterator =
+        DeltaLogActionUtils.readCommitFiles(
+            engine,
+            logSegment.getDeltas().stream()
+                .filter(
+                    file ->
+                        FileNames.getFileVersion(new Path(file.getPath()))
+                            > lastSeenCrcInfo.getVersion())
+                .sorted(
+                    Comparator.comparing((FileStatus a) -> new Path(a.getPath()).getName())
+                        .reversed())
+                .collect(Collectors.toList()),
+            CHECKPOINT_SCHEMA.add("commitInfo", CommitInfo.FULL_SCHEMA))) {
+
+      Optional<VersionColumnBatchTracker> currentVersionBatch = Optional.empty();
+
+      while (iterator.hasNext()) {
+        ColumnarBatch batch = iterator.next();
+        final int rowCount = batch.getSize();
+        if (rowCount == 0) {
+          continue;
+        }
+
+        // Get version from first row (assuming all rows in batch have same version)
+        long versionBatch = batch.getColumnVector(batch.getSchema().indexOf("version")).getLong(0);
+
+        // If this is a new version, process the previous version's batches
+        if (!currentVersionBatch.isPresent()
+            || versionBatch != currentVersionBatch.get().getVersion()) {
+          if (currentVersionBatch.isPresent()) {
+            boolean shouldFallback = currentVersionBatch.get().computeState(state);
+            if (shouldFallback) {
+              return Optional.empty();
+            }
+          }
+          currentVersionBatch = Optional.of(new VersionColumnBatchTracker(versionBatch));
+        }
+
+        // Collect the current batch
+        currentVersionBatch.get().collect(batch);
+      }
+
+      // Process the last version's batches
+      if (currentVersionBatch.isPresent()) {
+        boolean shouldFallback = currentVersionBatch.get().computeState(state);
+        if (shouldFallback) {
+          return Optional.empty();
+        }
+      }
+    }
+
+    // Merge with existing domain metadata
+    lastSeenCrcInfo
+        .getDomainMetadata()
+        .get()
+        .forEach(
+            dm -> {
+              if (!state.domainMetadataMap.containsKey(dm.getDomain())) {
+                state.domainMetadataMap.put(dm.getDomain(), dm);
+              }
+            });
+
+    // Filter to only non-removed domain metadata
+    Set<DomainMetadata> finalDomainMetadata = getNonRemovedDomainMetadata(state);
+
+    // Build and return the new CRC info
+    return Optional.of(
+        new CRCInfo(
+            logSegment.getVersion(),
+            state.metadataFromLog.orElseGet(lastSeenCrcInfo::getMetadata),
+            state.protocolFromLog.orElseGet(lastSeenCrcInfo::getProtocol),
+            state.tableSizeByte.longValue() + lastSeenCrcInfo.getTableSizeBytes(),
+            state.fileCount.longValue() + lastSeenCrcInfo.getNumFiles(),
+            Optional.empty(),
+            Optional.of(finalDomainMetadata),
+            Optional.of(
+                state
+                    .addedFileSizeHistogram
+                    .plus(lastSeenCrcInfo.getFileSizeHistogram().get())
+                    .minus(state.removedFileSizeHistogram))));
+  }
+
   private static void processAddRecord(ColumnVector addVector, StateTracker state, int rowId) {
     if (!addVector.isNullAt(rowId)) {
       // Get file size and update tracking information
@@ -192,19 +328,17 @@ public class ChecksumUtils {
       ColumnVector domainMetadataVector, StateTracker state, int rowId) {
     if (!domainMetadataVector.isNullAt(rowId)) {
       DomainMetadata domainMetadata = DomainMetadata.fromColumnVector(domainMetadataVector, rowId);
-      checkState(
-          !state.domainMetadataMap.containsKey(domainMetadata.getDomain()),
-          "unexpected duplicate domain metadata rows");
-      // CreateCheckpointIterator will ensure only the last entry of domain metadata
-      // got emit.
-      state.domainMetadataMap.put(domainMetadata.getDomain(), domainMetadata);
+      if (!state.domainMetadataMap.containsKey(domainMetadata.getDomain())) {
+        // CreateCheckpointIterator will ensure only the last entry of domain metadata
+        // got emit.
+        state.domainMetadataMap.put(domainMetadata.getDomain(), domainMetadata);
+      }
     }
   }
 
   private static void processMetadataRecord(
       ColumnVector metadataVector, StateTracker state, int rowId) {
-    if (!metadataVector.isNullAt(rowId)) {
-      checkState(!state.metadataFromLog.isPresent(), "unexpected duplicate selected metadata rows");
+    if (!metadataVector.isNullAt(rowId) && !state.metadataFromLog.isPresent()) {
       Metadata metadata = Metadata.fromColumnVector(metadataVector, rowId);
       state.metadataFromLog = Optional.of(metadata);
     }
@@ -212,8 +346,7 @@ public class ChecksumUtils {
 
   private static void processProtocolRecord(
       ColumnVector protocolVector, StateTracker state, int rowId) {
-    if (!protocolVector.isNullAt(rowId)) {
-      checkState(!state.protocolFromLog.isPresent(), "unexpected duplicate selected protocol rows");
+    if (!protocolVector.isNullAt(rowId) && !state.protocolFromLog.isPresent()) {
       Protocol protocol = Protocol.fromColumnVector(protocolVector, rowId);
       state.protocolFromLog = Optional.of(protocol);
     }
@@ -226,6 +359,91 @@ public class ChecksumUtils {
         .collect(Collectors.toSet());
   }
 
+  private static class VersionColumnBatchTracker {
+    private final long version;
+    private final List<ColumnarBatch> columnarBatches;
+
+    VersionColumnBatchTracker(long version) {
+      this.version = version;
+      this.columnarBatches = new ArrayList<>();
+    }
+
+    public void collect(ColumnarBatch columnarBatch) {
+      this.columnarBatches.add(columnarBatch);
+    }
+
+    public long getVersion() {
+      return version;
+    }
+
+    /**
+     * Computes state for all batches in this version.
+     *
+     * @param state The state tracker to update
+     * @return true if should fallback to full replay, false otherwise
+     */
+    public boolean computeState(StateTracker state) {
+      PeekableIterator<ColumnarBatch> peekableIterator =
+          new PeekableIterator<>(columnarBatches.iterator());
+      if (!peekableIterator.hasNext()) {
+        return false;
+      }
+      ColumnarBatch firstBatch = peekableIterator.peek();
+      if (firstBatch.getSize() == 0) {
+        return true;
+      }
+      ColumnVector commitInfoVector =
+          firstBatch.getColumnVector(firstBatch.getSchema().indexOf("commitInfo"));
+      CommitInfo commitInfo = CommitInfo.fromColumnVector(commitInfoVector, 0);
+      if (commitInfo == null) {
+        return true;
+      }
+      if (!INCREMENTAL_SUPPORTED_OPS.contains(commitInfo.getOperation())) {
+        return true;
+      }
+
+      // Scan all batches to understand the operations in this version
+      while (peekableIterator.hasNext()) {
+        ColumnarBatch batch = peekableIterator.next();
+        StructType schema = batch.getSchema();
+        ColumnVector addVector = batch.getColumnVector(schema.indexOf("add"));
+        ColumnVector removeVector = batch.getColumnVector(schema.indexOf("remove"));
+        ColumnVector metadataVector = batch.getColumnVector(schema.indexOf("metaData"));
+        ColumnVector protocolVector = batch.getColumnVector(schema.indexOf("protocol"));
+        ColumnVector domainMetadataVector = batch.getColumnVector(schema.indexOf("domainMetadata"));
+        int rowCount = batch.getSize();
+        if (rowCount == 0) {
+          continue;
+        }
+        for (int i = 0; i < rowCount; i++) {
+          if (!addVector.isNullAt(i)) {
+            processAddRecord(addVector, state, i);
+          }
+
+          // Process remove file records
+          if (!removeVector.isNullAt(i)) {
+            ColumnVector sizeVector = removeVector.getChild(REMOVE_SIZE_INDEX);
+            if (sizeVector.isNullAt(i)) {
+              logger.info("Falling back to full replay: detected remove without file size");
+              return true;
+            }
+            long fileSize = sizeVector.getLong(i);
+            state.tableSizeByte.add(-fileSize);
+            state.removedFileSizeHistogram.insert(fileSize);
+            state.fileCount.decrement();
+          }
+
+          // Process domain metadata, protocol, and metadata
+          processDomainMetadataRecord(domainMetadataVector, state, i);
+          processMetadataRecord(metadataVector, state, i);
+          processProtocolRecord(protocolVector, state, i);
+        }
+      }
+
+      return false; // No fallback needed
+    }
+  }
+
   /** Class for tracking state during log processing. */
   private static class StateTracker {
     Optional<Metadata> metadataFromLog = Optional.empty();
@@ -233,6 +451,7 @@ public class ChecksumUtils {
     LongAdder tableSizeByte = new LongAdder();
     LongAdder fileCount = new LongAdder();
     FileSizeHistogram addedFileSizeHistogram = FileSizeHistogram.createDefaultHistogram();
+    FileSizeHistogram removedFileSizeHistogram = FileSizeHistogram.createDefaultHistogram();
     Map<String, DomainMetadata> domainMetadataMap = new HashMap<>();
   }
 }
