@@ -5,19 +5,17 @@ import io.delta.kernel.engine.Engine;
 import io.delta.kernel.data.ColumnarBatch;
 import io.delta.kernel.data.FilteredColumnarBatch;
 import io.delta.kernel.data.ColumnVector;
+import io.delta.kernel.internal.actions.AddFile;
 import io.delta.kernel.internal.util.VectorUtils;
 import io.delta.kernel.types.*;
 import io.delta.kernel.utils.CloseableIterator;
 
-import org.apache.iceberg.DataFile;
-import org.apache.iceberg.ManifestFile;
-import org.apache.iceberg.ManifestReader;
-import org.apache.iceberg.Snapshot;
-import org.apache.iceberg.Table;
-import org.apache.iceberg.StructLike;
-import org.apache.iceberg.PartitionSpec;
+import org.apache.iceberg.*;
+import org.apache.iceberg.io.FileIO;
 
 import java.util.*;
+
+import static io.delta.kernel.internal.util.Utils.singletonCloseableIterator;
 
 public class IcebergBackedScan implements Scan {
 
@@ -45,7 +43,7 @@ public class IcebergBackedScan implements Scan {
 
         for (ManifestFile mf : manifests) {
             System.out.println("Reading manifest file: " + mf.path());
-            try (ManifestReader<DataFile> reader = ManifestReader.read(mf, icebergTable.io())) {
+            try (ManifestReader<DataFile> reader = ManifestFiles.read(mf, icebergTable.io())) {
                 for (DataFile df : reader) {
                     System.out.println("  → DataFile: " + df.path());
                     dataFiles.add(df);
@@ -57,7 +55,7 @@ public class IcebergBackedScan implements Scan {
 
         FilteredColumnarBatch result = buildScanFilesBatch(engine, dataFiles, icebergTable.spec(), tableRootPath);
         System.out.println("Returning batch with rows: " + result.getData().getSize());
-        return CloseableIterator.fromList(List.of(result));
+        return singletonCloseableIterator(result);
     }
 
     private FilteredColumnarBatch buildScanFilesBatch(
@@ -95,19 +93,12 @@ public class IcebergBackedScan implements Scan {
             tableRootList.add(tableRoot);
         }
 
-        StructType addFileSchema = new StructType(new StructField[]{
-                new StructField("path", new StringType(), false),
-                new StructField("partitionValues", new MapType(new StringType(), new StringType(), true), false),
-                new StructField("size", new LongType(), false),
-                new StructField("modificationTime", new LongType(), false),
-                new StructField("dataChange", new BooleanType(), false),
-                new StructField("deletionVector", new StringType(), true),
-                new StructField("tags", new MapType(new StringType(), new StringType(), true), true)
-        });
+        StructType addFileSchema = AddFile.FULL_SCHEMA;
 
         ColumnVector[] addCols = new ColumnVector[]{
-                engine.getVectorUtils().stringVectorFrom(pathList),
-                engine.getVectorUtils().mapVectorFrom(partitionMapList, engine.getVectorUtils()::stringVectorFrom, engine.getVectorUtils()::stringVectorFrom),
+                VectorUtils.buildColumnVector(pathList, StringType.STRING),
+                VectorUtils.buildColumnVector(partitionMapList,   new MapType(StringType.STRING, StringType.STRING, true)),
+                VectorUtils.buildColumnVector(sizeList, LongType.LONG)
                 engine.getVectorUtils().longVectorFrom(sizeList),
                 engine.getVectorUtils().longVectorFrom(modTimeList),
                 engine.getVectorUtils().booleanVectorFrom(dataChangeList),
