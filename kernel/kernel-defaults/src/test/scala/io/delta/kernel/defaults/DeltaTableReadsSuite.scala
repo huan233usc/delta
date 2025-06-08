@@ -21,12 +21,15 @@ import java.sql.Date
 import java.time.Instant
 
 import scala.collection.JavaConverters._
+import scala.collection.mutable.ArrayBuffer
 
 import io.delta.golden.GoldenTableUtils.goldenTablePath
-import io.delta.kernel.Table
+import io.delta.kernel.{Snapshot, Table}
 import io.delta.kernel.defaults.utils.{TestRow, TestUtils}
+import io.delta.kernel.engine.Engine
 import io.delta.kernel.exceptions.{InvalidTableException, KernelException, TableNotFoundException}
-import io.delta.kernel.internal.TableImpl
+import io.delta.kernel.internal.{InternalScanFileUtils, TableImpl}
+import io.delta.kernel.internal.data.ScanStateRow
 import io.delta.kernel.internal.fs.Path
 import io.delta.kernel.internal.util.{DateTimeConstants, FileNames}
 import io.delta.kernel.internal.util.InternalUtils.daysSinceEpoch
@@ -36,6 +39,7 @@ import org.apache.spark.sql.delta.{DeltaLog, DeltaOperations}
 import org.apache.spark.sql.delta.actions.{AddFile, Metadata}
 
 import org.apache.hadoop.shaded.org.apache.commons.io.FileUtils
+import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.functions.col
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -248,6 +252,58 @@ class DeltaTableReadsSuite extends AnyFunSuite with TestUtils {
       intercept[TableNotFoundException] {
         latestSnapshot(dir.getAbsolutePath)
       }
+    }
+  }
+
+  test("iceberg table") {
+    withTempDir { dir =>
+      val sparkSession = SparkSession.builder
+        .appName("iceberg")
+        .master("local[*]")
+        .config("spark.sql.catalog.local", "org.apache.iceberg.spark.SparkCatalog")
+        .config("spark.sql.catalog.local.type", "hadoop")
+        .config("spark.sql.catalog.local.warehouse", s"file:$dir")
+        .getOrCreate()
+
+      // Create and populate Iceberg table via Spark SQL
+      sparkSession.sql("CREATE TABLE local.ns.test (id INTEGER) USING ICEBERG")
+      sparkSession.sql("INSERT INTO local.ns.test VALUES (1), (2), (3)")
+
+      // Now test reading via Delta Kernel + Iceberg integration
+      import org.apache.iceberg.hadoop.HadoopTables
+      import io.delta.kernel.defaults.iceberg.IcebergBackedTable
+
+      // Create HadoopTables and load the table that was created via Spark SQL
+      val hadoopTables = new HadoopTables()
+      val tablePath = s"$dir/ns/test" // Iceberg creates this path structure
+
+      // Create your Iceberg-backed Delta table
+      val deltaTable = new IcebergBackedTable(hadoopTables, tablePath)
+      val snapshot = deltaTable.getLatestSnapshot(defaultEngine)
+
+      // Verify snapshot properties
+      assert(snapshot != null)
+      assert(snapshot.getVersion >= 0)
+      val schema = snapshot.getSchema()
+      assert(schema.fieldNames().contains("id"))
+
+      // Use the existing readSnapshot helper method to read the actual data
+      val actualData = readSnapshot(snapshot, engine = defaultEngine)
+
+      // Verify the data matches what we inserted
+      val expectedData = Seq(
+        TestRow(1),
+        TestRow(2),
+        TestRow(3))
+
+      checkAnswer(actualData.map(TestRow(_)), expectedData)
+
+      println(s"Successfully read " +
+        s"${actualData.size} rows from Iceberg table via Delta Kernel")
+      actualData.foreach(row => println(s"Row: ${TestRow(row)}"))
+
+      // Clean up
+      sparkSession.stop()
     }
   }
 

@@ -685,7 +685,9 @@ lazy val kernelDefaults = (project in file("kernel/kernel-defaults"))
       "com.fasterxml.jackson.core" % "jackson-databind" % "2.13.5",
       "com.fasterxml.jackson.datatype" % "jackson-datatype-jdk8" % "2.13.5",
       "org.apache.parquet" % "parquet-hadoop" % "1.12.3",
-      "org.apache.iceberg" % "iceberg-core" % "1.8.1",
+      "org.apache.iceberg" % "iceberg-core" % "1.4.3",
+      "org.apache.iceberg" % "iceberg-api" % "1.4.3",
+      "org.apache.iceberg" % "iceberg-spark-3.4_2.12" % "1.4.3" % "test",
 
       "org.scalatest" %% "scalatest" % scalaTestVersion % "test",
       "junit" % "junit" % "4.13.2" % "test",
