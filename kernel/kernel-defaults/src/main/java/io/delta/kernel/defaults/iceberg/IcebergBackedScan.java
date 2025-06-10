@@ -230,12 +230,10 @@ public class IcebergBackedScan implements Scan {
     Protocol protocol = new Protocol(1, 2); // Basic Delta protocol without advanced features
 
     // Physical equivalent of the logical read schema
-    StructType physicalReadSchema =
-        readSchema; // For Iceberg, logical = physical (no column mapping)
+    StructType physicalReadSchema = readSchema; //TODO: schema evolution?
 
     // Compute the physical data read schema, basically the list of columns to read
-    // from a Parquet data file. It should exclude partition columns and include
-    // row_index metadata columns (in case DVs are present)
+    // from a Parquet data file. It should exclude partition columns
     List<String> partitionColumns = VectorUtils.toJavaList(metadata.getPartitionColumns());
     StructType physicalDataReadSchema =
         PartitionUtils.physicalSchemaWithoutPartitionColumns(
