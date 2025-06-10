@@ -118,8 +118,7 @@ public class IcebergBackedTable implements Table {
   @Override
   public TransactionBuilder createTransactionBuilder(
       Engine engine, String engineInfo, Operation operation) {
-    // For now, return null as this would require implementing the full transaction system
-    // In a complete implementation, this would create an IcebergBackedTransactionBuilder
+    // TODO:
     throw new UnsupportedOperationException(
         "Transaction operations are not yet supported for Iceberg-backed tables");
   }
@@ -127,16 +126,12 @@ public class IcebergBackedTable implements Table {
   @Override
   public void checkpoint(Engine engine, long version)
       throws TableNotFoundException, CheckpointAlreadyExistsException, IOException {
-    // Iceberg doesn't have the same checkpoint concept as Delta Lake
-    // This is Delta-specific functionality, so we throw an exception
     throw new UnsupportedOperationException(
         "Checkpoint operations are not supported for Iceberg-backed tables");
   }
 
   @Override
   public void checksum(Engine engine, long version) throws TableNotFoundException, IOException {
-    // Similar to checkpoint, this is Delta-specific functionality
-    // Iceberg handles data integrity differently, so we throw an exception
     throw new UnsupportedOperationException(
         "Checksum operations are not supported for Iceberg-backed tables");
   }

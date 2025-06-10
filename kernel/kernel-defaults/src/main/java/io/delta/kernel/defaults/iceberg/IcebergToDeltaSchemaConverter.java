@@ -96,7 +96,7 @@ public class IcebergToDeltaSchemaConverter {
             deltaStructType.add(
                 field.name(),
                 convertType(field.type()),
-                !field.isRequired(), // In Iceberg, isRequired() means non-nullable
+                !field.isRequired(),
                 fieldMetadata.build());
       }
 

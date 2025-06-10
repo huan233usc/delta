@@ -93,7 +93,7 @@ public class IcebergBackedSnapshot implements Snapshot {
       IcebergScanBuilder newBuilder =
           new IcebergScanBuilder(tableMetadata, icebergSnapshot, icebergIo);
       newBuilder.filter = Optional.of(predicate);
-      newBuilder.readSchema = this.readSchema; // Copy existing read schema
+      newBuilder.readSchema = this.readSchema;
       return newBuilder;
     }
 
@@ -102,25 +102,19 @@ public class IcebergBackedSnapshot implements Snapshot {
       IcebergScanBuilder newBuilder =
           new IcebergScanBuilder(tableMetadata, icebergSnapshot, icebergIo);
       newBuilder.readSchema = Optional.of(readSchema);
-      newBuilder.filter = this.filter; // Copy existing filter
+      newBuilder.filter = this.filter;
       return newBuilder;
     }
 
     @Override
     public Scan build() {
-      // Use read schema if provided, otherwise use the full table schema
       StructType effectiveReadSchema =
           readSchema.orElse(IcebergToDeltaSchemaConverter.toKernelSchema(tableMetadata.schema()));
-
-      // For now, we'll create a simple engine placeholder - in real usage this would be passed in
-      // or we'd modify the build method signature to accept an Engine parameter
       return new IcebergBackedScan(icebergIo, tableMetadata, icebergSnapshot, effectiveReadSchema) {
         // Override to handle the filter if provided
         @Override
         public Optional<io.delta.kernel.expressions.Predicate> getRemainingFilter() {
           // For now, return the original filter as remaining filter
-          // In a full implementation, you'd apply what you can at the Iceberg level
-          // and return only what couldn't be pushed down
           return filter;
         }
       };

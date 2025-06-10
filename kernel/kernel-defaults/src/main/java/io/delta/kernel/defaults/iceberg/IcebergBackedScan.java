@@ -109,7 +109,6 @@ public class IcebergBackedScan implements Scan {
       modificationTimeList.add(System.currentTimeMillis());
       dataChangeList.add(true);
       statsList.add(null); // No stats for now
-      // Convert Map to MapValue
       tagsList.add(VectorUtils.stringStringMapValue(Collections.emptyMap()));
     }
 
