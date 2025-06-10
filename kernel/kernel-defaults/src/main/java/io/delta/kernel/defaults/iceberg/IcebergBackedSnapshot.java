@@ -24,38 +24,40 @@ import io.delta.kernel.types.StructType;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
-import org.apache.iceberg.BaseTable;
 import org.apache.iceberg.PartitionField;
+import org.apache.iceberg.TableMetadata;
+import org.apache.iceberg.io.FileIO;
 
 public class IcebergBackedSnapshot implements Snapshot {
 
-  private final org.apache.iceberg.Table icebergTable;
+  private final TableMetadata tableMetadata;
+  private final FileIO icebergIo;
 
-  public IcebergBackedSnapshot(org.apache.iceberg.Table icebergTable) {
-    this.icebergTable = icebergTable;
+  public IcebergBackedSnapshot(TableMetadata tableMetadata, FileIO icebergIo) {
+    this.tableMetadata = tableMetadata;
+    this.icebergIo = icebergIo;
   }
 
   @Override
   public long getVersion() {
-    BaseTable baseTable = (BaseTable) icebergTable;
-    return baseTable.operations().current().lastSequenceNumber() - 1;
+    return tableMetadata.currentSnapshot().sequenceNumber() - 1;
   }
 
   @Override
   public List<String> getPartitionColumnNames() {
-    return icebergTable.spec().fields().stream()
+    return tableMetadata.spec().fields().stream()
         .map(PartitionField::name)
         .collect(Collectors.toList());
   }
 
   @Override
   public long getTimestamp(Engine engine) {
-    return icebergTable.currentSnapshot().timestampMillis();
+    return tableMetadata.currentSnapshot().timestampMillis();
   }
 
   @Override
   public StructType getSchema() {
-    return IcebergToDeltaSchemaConverter.toKernelSchema(icebergTable.schema());
+    return IcebergToDeltaSchemaConverter.toKernelSchema(tableMetadata.schema());
   }
 
   @Override
@@ -65,26 +67,31 @@ public class IcebergBackedSnapshot implements Snapshot {
 
   @Override
   public ScanBuilder getScanBuilder() {
-    return new IcebergScanBuilder(icebergTable, icebergTable.currentSnapshot());
+    return new IcebergScanBuilder(tableMetadata, tableMetadata.currentSnapshot(), icebergIo);
   }
 
   /** ScanBuilder implementation for Iceberg tables */
   private static class IcebergScanBuilder implements ScanBuilder {
 
-    private final org.apache.iceberg.Table icebergTable;
+    private final org.apache.iceberg.TableMetadata tableMetadata;
     private final org.apache.iceberg.Snapshot icebergSnapshot;
+    private final FileIO icebergIo;
     private Optional<Predicate> filter = Optional.empty();
     private Optional<StructType> readSchema = Optional.empty();
 
     IcebergScanBuilder(
-        org.apache.iceberg.Table icebergTable, org.apache.iceberg.Snapshot icebergSnapshot) {
-      this.icebergTable = icebergTable;
+        org.apache.iceberg.TableMetadata tableMetadata,
+        org.apache.iceberg.Snapshot icebergSnapshot,
+        FileIO icebergIo) {
+      this.tableMetadata = tableMetadata;
       this.icebergSnapshot = icebergSnapshot;
+      this.icebergIo = icebergIo;
     }
 
     @Override
     public ScanBuilder withFilter(Predicate predicate) {
-      IcebergScanBuilder newBuilder = new IcebergScanBuilder(icebergTable, icebergSnapshot);
+      IcebergScanBuilder newBuilder =
+          new IcebergScanBuilder(tableMetadata, icebergSnapshot, icebergIo);
       newBuilder.filter = Optional.of(predicate);
       newBuilder.readSchema = this.readSchema; // Copy existing read schema
       return newBuilder;
@@ -92,7 +99,8 @@ public class IcebergBackedSnapshot implements Snapshot {
 
     @Override
     public ScanBuilder withReadSchema(StructType readSchema) {
-      IcebergScanBuilder newBuilder = new IcebergScanBuilder(icebergTable, icebergSnapshot);
+      IcebergScanBuilder newBuilder =
+          new IcebergScanBuilder(tableMetadata, icebergSnapshot, icebergIo);
       newBuilder.readSchema = Optional.of(readSchema);
       newBuilder.filter = this.filter; // Copy existing filter
       return newBuilder;
@@ -102,11 +110,11 @@ public class IcebergBackedSnapshot implements Snapshot {
     public Scan build() {
       // Use read schema if provided, otherwise use the full table schema
       StructType effectiveReadSchema =
-          readSchema.orElse(IcebergToDeltaSchemaConverter.toKernelSchema(icebergTable.schema()));
+          readSchema.orElse(IcebergToDeltaSchemaConverter.toKernelSchema(tableMetadata.schema()));
 
       // For now, we'll create a simple engine placeholder - in real usage this would be passed in
       // or we'd modify the build method signature to accept an Engine parameter
-      return new IcebergBackedScan(icebergTable, icebergSnapshot, effectiveReadSchema) {
+      return new IcebergBackedScan(icebergIo, tableMetadata, icebergSnapshot, effectiveReadSchema) {
         // Override to handle the filter if provided
         @Override
         public Optional<io.delta.kernel.expressions.Predicate> getRemainingFilter() {

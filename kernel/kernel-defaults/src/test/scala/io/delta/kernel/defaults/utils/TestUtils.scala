@@ -339,6 +339,57 @@ trait TestUtils extends Assertions with SQLHelper {
     new MapType(IntegerType.INTEGER, LongType.LONG, true),
     new StructType().add("s1", BooleanType.BOOLEAN).add("s2", IntegerType.INTEGER))
 
+  def checkTable2(
+      table: Table,
+      expectedAnswer: Seq[TestRow],
+      readCols: Seq[String] = null,
+      engine: Engine = defaultEngine,
+      expectedSchema: StructType = null,
+      filter: Predicate = null,
+      version: Option[Long] = None,
+      timestamp: Option[Long] = None,
+      expectedRemainingFilter: Predicate = null,
+      expectedVersion: Option[Long] = None): Unit = {
+    assert(version.isEmpty || timestamp.isEmpty, "Cannot provide both a version and timestamp")
+
+    val snapshot = if (version.isDefined) {
+      table
+        .getSnapshotAsOfVersion(engine, version.get)
+    } else if (timestamp.isDefined) {
+      table
+        .getSnapshotAsOfTimestamp(engine, timestamp.get)
+    } else {
+      table
+        .getLatestSnapshot(engine)
+    }
+
+    val readSchema = if (readCols == null) {
+      null
+    } else {
+      val schema = snapshot.getSchema()
+      new StructType(readCols.map(schema.get(_)).asJava)
+    }
+
+    if (expectedSchema != null) {
+      assert(
+        expectedSchema == snapshot.getSchema(),
+        s"""
+           |Expected schema does not match actual schema:
+           |Expected schema: $expectedSchema
+           |Actual schema: ${snapshot.getSchema()}
+           |""".stripMargin)
+    }
+
+    expectedVersion.foreach { version =>
+      assert(
+        version == snapshot.getVersion(),
+        s"Expected version $version does not match actual version ${snapshot.getVersion()}")
+    }
+
+    val result = readSnapshot(snapshot, readSchema, filter, expectedRemainingFilter, engine)
+    checkAnswer(result, expectedAnswer)
+  }
+
   /**
    * Compares the rows in the tables latest snapshot with the expected answer and fails if they
    * do not match. The comparison is order independent. If expectedSchema is provided, checks

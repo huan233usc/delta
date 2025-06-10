@@ -25,40 +25,45 @@ import io.delta.kernel.internal.actions.Format;
 import io.delta.kernel.internal.actions.Metadata;
 import io.delta.kernel.internal.actions.Protocol;
 import io.delta.kernel.internal.data.ScanStateRow;
+import io.delta.kernel.internal.util.PartitionUtils;
 import io.delta.kernel.internal.util.VectorUtils;
 import io.delta.kernel.types.*;
 import io.delta.kernel.utils.CloseableIterator;
 import java.util.*;
 import java.util.stream.Collectors;
 import org.apache.iceberg.*;
+import org.apache.iceberg.io.FileIO;
 
 public class IcebergBackedScan implements Scan {
 
-  private final Table icebergTable;
+  private final TableMetadata tableMetadata;
   private final Snapshot snapshot;
   private final String tableRootPath;
   private final StructType readSchema;
+  private final FileIO icebergIo;
 
-  public IcebergBackedScan(Table icebergTable, Snapshot snapshot, StructType readSchema) {
-    this.icebergTable = icebergTable;
+  public IcebergBackedScan(
+      FileIO icebergIo, TableMetadata tableMetadata, Snapshot snapshot, StructType readSchema) {
+    this.tableMetadata = tableMetadata;
     this.snapshot = snapshot;
-    this.tableRootPath = icebergTable.location();
+    this.tableRootPath = tableMetadata.location();
     this.readSchema = readSchema;
+    this.icebergIo = icebergIo;
   }
 
   @Override
   public CloseableIterator<FilteredColumnarBatch> getScanFiles(Engine engine) {
     System.out.println("IcebergBackedScan.getScanFiles called");
     System.out.println("Snapshot version: " + snapshot.snapshotId());
-    System.out.println("Table location: " + icebergTable.location());
+    System.out.println("Table location: " + tableMetadata.location());
 
     List<DataFile> dataFiles = new ArrayList<>();
-    List<ManifestFile> manifests = snapshot.dataManifests(icebergTable.io());
+    List<ManifestFile> manifests = snapshot.dataManifests(icebergIo);
     System.out.println("Manifest count: " + manifests.size());
 
     for (ManifestFile mf : manifests) {
       System.out.println("Reading manifest file: " + mf.path());
-      try (ManifestReader<DataFile> reader = ManifestFiles.read(mf, icebergTable.io())) {
+      try (ManifestReader<DataFile> reader = ManifestFiles.read(mf, icebergIo)) {
         for (DataFile df : reader) {
           System.out.println("  → DataFile: " + df.path());
           dataFiles.add(df);
@@ -68,7 +73,7 @@ public class IcebergBackedScan implements Scan {
       }
     }
 
-    FilteredColumnarBatch result = buildScanFilesBatch(engine, dataFiles, icebergTable.spec());
+    FilteredColumnarBatch result = buildScanFilesBatch(engine, dataFiles, tableMetadata.spec());
     System.out.println("Returning batch with rows: " + result.getData().getSize());
     return singletonCloseableIterator(result);
   }
@@ -228,9 +233,15 @@ public class IcebergBackedScan implements Scan {
     StructType physicalReadSchema =
         readSchema; // For Iceberg, logical = physical (no column mapping)
 
-    // For Iceberg, partition columns are in the files, so physical data read schema = physical read
-    // schema
-    StructType physicalDataReadSchema = physicalReadSchema;
+    // Compute the physical data read schema, basically the list of columns to read
+    // from a Parquet data file. It should exclude partition columns and include
+    // row_index metadata columns (in case DVs are present)
+    List<String> partitionColumns = VectorUtils.toJavaList(metadata.getPartitionColumns());
+    StructType physicalDataReadSchema =
+        PartitionUtils.physicalSchemaWithoutPartitionColumns(
+            readSchema, /* logical read schema */
+            physicalReadSchema,
+            new HashSet<>(partitionColumns));
 
     return ScanStateRow.of(
         metadata,
@@ -247,7 +258,7 @@ public class IcebergBackedScan implements Scan {
 
     // Create partition columns array
     List<String> partitionColumnNames =
-        icebergTable.spec().fields().stream()
+        tableMetadata.spec().fields().stream()
             .map(PartitionField::name)
             .collect(Collectors.toList());
     ArrayValue partitionColumns =

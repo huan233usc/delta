@@ -23,50 +23,121 @@ import io.delta.kernel.engine.Engine;
 import io.delta.kernel.exceptions.CheckpointAlreadyExistsException;
 import io.delta.kernel.exceptions.TableNotFoundException;
 import java.io.IOException;
-import org.apache.iceberg.hadoop.HadoopTables;
+import org.apache.iceberg.BaseTable;
+import org.apache.iceberg.SnapshotRef;
+import org.apache.iceberg.TableMetadata;
+import org.apache.iceberg.util.SnapshotUtil;
 
 public class IcebergBackedTable implements Table {
 
-  private final String tablePath;
   private final org.apache.iceberg.Table icebergTable;
 
-  public IcebergBackedTable(HadoopTables icebergCatalog, String tablePath) {
-    this.tablePath = tablePath;
-    this.icebergTable = icebergCatalog.load(tablePath);
+  public IcebergBackedTable(org.apache.iceberg.Table icebergTable) {
+    this.icebergTable = icebergTable;
   }
 
   @Override
   public String getPath(Engine engine) {
-    return tablePath;
+    return icebergTable.location();
   }
 
   @Override
   public Snapshot getLatestSnapshot(Engine engine) throws TableNotFoundException {
-    return new IcebergBackedSnapshot(icebergTable);
+    TableMetadata tableMetadata = ((BaseTable) icebergTable).operations().current();
+    org.apache.iceberg.Snapshot currentSnapshot = tableMetadata.currentSnapshot();
+
+    if (currentSnapshot == null) {
+      throw new TableNotFoundException("No current snapshot found in table");
+    }
+
+    return new IcebergBackedSnapshot(tableMetadata, icebergTable.io());
   }
 
   @Override
   public Snapshot getSnapshotAsOfVersion(Engine engine, long versionId)
       throws TableNotFoundException {
-    return null;
+    // Map Delta version to Iceberg sequence number
+    long targetSequenceNumber = versionId + 1;
+
+    // Find the snapshot with the target sequence number
+    org.apache.iceberg.Snapshot targetSnapshot = null;
+    for (org.apache.iceberg.Snapshot snapshot : icebergTable.snapshots()) {
+      if (snapshot.sequenceNumber() == targetSequenceNumber) {
+        targetSnapshot = snapshot;
+        break;
+      }
+    }
+
+    if (targetSnapshot == null) {
+      throw new TableNotFoundException("Snapshot with version " + versionId + " not found");
+    }
+
+    // Build new TableMetadata with the target snapshot as current
+    TableMetadata baseMetadata = ((BaseTable) icebergTable).operations().current();
+    TableMetadata snapshotMetadata =
+        TableMetadata.buildFrom(baseMetadata)
+            .setBranchSnapshot(targetSnapshot.snapshotId(), SnapshotRef.MAIN_BRANCH)
+            .build();
+
+    return new IcebergBackedSnapshot(snapshotMetadata, icebergTable.io());
   }
 
   @Override
   public Snapshot getSnapshotAsOfTimestamp(Engine engine, long millisSinceEpochUTC)
       throws TableNotFoundException {
-    return null;
+    try {
+      // Use SnapshotUtil to find the snapshot ID as of the given timestamp
+      Long snapshotId = SnapshotUtil.nullableSnapshotIdAsOfTime(icebergTable, millisSinceEpochUTC);
+
+      if (snapshotId == null) {
+        throw new TableNotFoundException(
+            "No snapshot found at or before timestamp " + millisSinceEpochUTC);
+      }
+
+      // Verify the snapshot exists
+      org.apache.iceberg.Snapshot targetSnapshot = icebergTable.snapshot(snapshotId);
+      if (targetSnapshot == null) {
+        throw new TableNotFoundException("Snapshot with ID " + snapshotId + " not found");
+      }
+
+      // Build new TableMetadata with the target snapshot as current
+      TableMetadata baseMetadata = ((BaseTable) icebergTable).operations().current();
+      TableMetadata snapshotMetadata =
+          TableMetadata.buildFrom(baseMetadata)
+              .setBranchSnapshot(snapshotId, SnapshotRef.MAIN_BRANCH)
+              .build();
+
+      return new IcebergBackedSnapshot(snapshotMetadata, icebergTable.io());
+
+    } catch (IllegalArgumentException e) {
+      throw new TableNotFoundException(
+          "No snapshot found at or before timestamp " + millisSinceEpochUTC);
+    }
   }
 
   @Override
   public TransactionBuilder createTransactionBuilder(
       Engine engine, String engineInfo, Operation operation) {
-    return null;
+    // For now, return null as this would require implementing the full transaction system
+    // In a complete implementation, this would create an IcebergBackedTransactionBuilder
+    throw new UnsupportedOperationException(
+        "Transaction operations are not yet supported for Iceberg-backed tables");
   }
 
   @Override
   public void checkpoint(Engine engine, long version)
-      throws TableNotFoundException, CheckpointAlreadyExistsException, IOException {}
+      throws TableNotFoundException, CheckpointAlreadyExistsException, IOException {
+    // Iceberg doesn't have the same checkpoint concept as Delta Lake
+    // This is Delta-specific functionality, so we throw an exception
+    throw new UnsupportedOperationException(
+        "Checkpoint operations are not supported for Iceberg-backed tables");
+  }
 
   @Override
-  public void checksum(Engine engine, long version) throws TableNotFoundException, IOException {}
+  public void checksum(Engine engine, long version) throws TableNotFoundException, IOException {
+    // Similar to checkpoint, this is Delta-specific functionality
+    // Iceberg handles data integrity differently, so we throw an exception
+    throw new UnsupportedOperationException(
+        "Checksum operations are not supported for Iceberg-backed tables");
+  }
 }
