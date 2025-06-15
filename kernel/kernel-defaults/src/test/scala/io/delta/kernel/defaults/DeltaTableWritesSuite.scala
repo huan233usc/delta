@@ -51,6 +51,8 @@ import io.delta.kernel.types.TimestampType.TIMESTAMP
 import io.delta.kernel.utils.CloseableIterable
 import io.delta.kernel.utils.CloseableIterable.{emptyIterable, inMemoryIterable}
 
+import org.apache.spark.sql.SparkSession
+
 /** Transaction commit in this suite IS REQUIRED TO use commitTransaction than .commit */
 class DeltaTableWritesSuite extends DeltaTableWriteSuiteBase with ParquetSuiteBase {
 
@@ -447,6 +449,49 @@ class DeltaTableWritesSuite extends DeltaTableWriteSuiteBase with ParquetSuiteBa
       verifyCommitResult(commitResult0, expVersion = 0, expIsReadyForCheckpoint = false)
       verifyCommitInfo(tblPath, version = 0, partitionCols = Seq.empty, operation = WRITE)
       verifyWrittenContent(tblPath, testSchema, expectedAnswer)
+    }
+  }
+
+  test("insert into iceberg table - already existing table") {
+    withTempDirAndEngine { (tblPath, engine) =>
+      val sparkSession = SparkSession.builder
+        .appName("iceberg")
+        .master("local[*]")
+        .config("spark.sql.catalog.local", "org.apache.iceberg.spark.SparkCatalog")
+        .config("spark.sql.catalog.local.type", "hadoop")
+        .config("spark.sql.catalog.local.cache-enabled", "false")
+        .config("spark.sql.catalog.local.warehouse", s"file:$tblPath")
+        .getOrCreate()
+
+      // Create and populate Iceberg table via Spark SQL
+      sparkSession.sql("CREATE TABLE local.ns.test (id INTEGER) USING ICEBERG")
+
+      // Now test reading via Delta Kernel + Iceberg integration
+      import org.apache.iceberg.hadoop.HadoopTables
+      import io.delta.kernel.defaults.iceberg.IcebergBackedTable
+
+      // Create HadoopTables and load the table that was created via Spark SQL
+      val hadoopTables = new HadoopTables()
+      val tablePath = s"$tblPath/ns/test" // Iceberg creates this path structure
+
+      // Create your Iceberg-backed Delta table
+      val icebergTable = new IcebergBackedTable(hadoopTables.load(tablePath))
+
+      appendDataWithTable(
+        engine,
+        icebergTable,
+        partCols = Seq.empty,
+        data = Seq(Map.empty[String, Literal] -> dataBatches1))
+
+      appendDataWithTable(
+        engine,
+        icebergTable,
+        partCols = Seq.empty,
+        data = Seq(Map.empty[String, Literal] -> dataBatches2))
+
+      val expAnswer = dataBatches1.flatMap(_.toTestRows) ++ dataBatches2.flatMap(_.toTestRows)
+      val resultSpark = spark.sql(s"SELECT * FROM local.ns.test").collect().map(TestRow(_))
+      checkAnswer(resultSpark, expAnswer)
     }
   }
 

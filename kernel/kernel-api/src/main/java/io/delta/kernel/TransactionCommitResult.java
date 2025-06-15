@@ -42,7 +42,7 @@ public class TransactionCommitResult {
       TransactionMetricsResult transactionMetrics) {
     this.version = version;
     this.postCommitHooks = requireNonNull(postCommitHooks);
-    this.transactionMetrics = requireNonNull(transactionMetrics);
+    this.transactionMetrics = transactionMetrics;
   }
 
   /**

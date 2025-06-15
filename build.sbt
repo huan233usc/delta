@@ -53,7 +53,7 @@ val default_scala_version = settingKey[String]("Default Scala version")
 Global / default_scala_version := scala212
 
 val LATEST_RELEASED_SPARK_VERSION = "3.5.3"
-val SPARK_MASTER_VERSION = "4.0.0-SNAPSHOT"
+val SPARK_MASTER_VERSION = "3.5.3"
 val sparkVersion = settingKey[String]("Spark version")
 spark / sparkVersion := getSparkVersion()
 connectCommon / sparkVersion := getSparkVersion()
@@ -687,7 +687,7 @@ lazy val kernelDefaults = (project in file("kernel/kernel-defaults"))
       "org.apache.parquet" % "parquet-hadoop" % "1.12.3",
       "org.apache.iceberg" % "iceberg-core" % "1.4.3",
       "org.apache.iceberg" % "iceberg-api" % "1.4.3",
-      "org.apache.iceberg" % "iceberg-spark-3.4_2.12" % "1.4.3" % "test",
+      "org.apache.iceberg" % "iceberg-spark-3.5_2.12" % "1.4.3" % "test",
 
       "org.scalatest" %% "scalatest" % scalaTestVersion % "test",
       "junit" % "junit" % "4.13.2" % "test",

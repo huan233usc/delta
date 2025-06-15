@@ -229,7 +229,7 @@ public class IcebergBackedScan implements Scan {
     Protocol protocol = new Protocol(1, 2); // Basic Delta protocol without advanced features
 
     // Physical equivalent of the logical read schema
-    StructType physicalReadSchema = readSchema; //TODO: schema evolution?
+    StructType physicalReadSchema = readSchema; // TODO: schema evolution?
 
     // Compute the physical data read schema, basically the list of columns to read
     // from a Parquet data file. It should exclude partition columns

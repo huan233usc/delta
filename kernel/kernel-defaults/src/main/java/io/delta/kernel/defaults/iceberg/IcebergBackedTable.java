@@ -119,8 +119,7 @@ public class IcebergBackedTable implements Table {
   public TransactionBuilder createTransactionBuilder(
       Engine engine, String engineInfo, Operation operation) {
     // TODO:
-    throw new UnsupportedOperationException(
-        "Transaction operations are not yet supported for Iceberg-backed tables");
+    return new IcebergBackedTransactionBuilder(icebergTable, engineInfo, operation);
   }
 
   @Override
