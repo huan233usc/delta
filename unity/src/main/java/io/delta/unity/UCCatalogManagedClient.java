@@ -16,8 +16,6 @@
 
 package io.delta.unity;
 
-import static io.delta.kernel.internal.util.Preconditions.checkArgument;
-
 import io.delta.kernel.ResolvedTable;
 import io.delta.kernel.TableManager;
 import io.delta.kernel.annotation.Experimental;
@@ -66,26 +64,55 @@ public class UCCatalogManagedClient {
    * @param tablePath The path to the Delta table in the underlying storage system.
    * @param version The version of the table to load.
    */
-  public ResolvedTable loadTable(Engine engine, String ucTableId, String tablePath, long version) {
+  public ResolvedTable loadTable(
+      Engine engine, String ucTableId, String tablePath, Optional<Long> version) {
     Objects.requireNonNull(engine, "engine is null");
     Objects.requireNonNull(ucTableId, "ucTableId is null");
     Objects.requireNonNull(tablePath, "tablePath is null");
-    checkArgument(version >= 0, "version must be non-negative");
 
     logger.info("[{}] Resolving table at version {}", ucTableId, version);
-    final GetCommitsResponse response = getRatifiedCommitsFromUC(ucTableId, tablePath, version);
-    validateLoadTableVersionExists(ucTableId, version, response.getLatestTableVersion());
+    final GetCommitsResponse response = getRatifiedCommitsFromUC(ucTableId, tablePath);
+    System.out.println("response" + response.getLatestTableVersion() + response.getCommits());
+    if (version.isPresent()) {
+      validateLoadTableVersionExists(ucTableId, version.get(), response.getLatestTableVersion());
+    }
     final List<ParsedLogData> logData =
         getSortedKernelLogDataFromRatifiedCommits(ucTableId, response.getCommits());
 
     return timeOperation(
         "TableManager.loadTable",
         ucTableId,
-        () ->
-            TableManager.loadTable(tablePath)
-                .atVersion(version)
+        () -> {
+          if (version.isPresent()) {
+            return TableManager.loadTable(tablePath)
+                .atVersion(version.get())
                 .withLogData(logData)
-                .build(engine));
+                .build(engine);
+          }
+          return TableManager.loadTable(tablePath).withLogData(logData).build(engine);
+        });
+  }
+
+  private GetCommitsResponse getRatifiedCommitsFromUC(String ucTableId, String tablePath) {
+    logger.info(
+        "[{}] Invoking the UCClient to get ratified commits at latest version {}", ucTableId);
+
+    return timeOperation(
+        "UCClient.getCommits",
+        ucTableId,
+        () -> {
+          try {
+            return ucClient.getCommits(
+                ucTableId,
+                new Path(tablePath).toUri(),
+                Optional.empty() /* startVersion */,
+                Optional.empty() /* endVersion */);
+          } catch (IOException ex) {
+            throw new UncheckedIOException(ex);
+          } catch (UCCommitCoordinatorException ex) {
+            throw new RuntimeException(ex);
+          }
+        });
   }
 
   private GetCommitsResponse getRatifiedCommitsFromUC(
