@@ -177,10 +177,7 @@ public class DeltaLogActionUtils {
                       () -> commitTimestampGenerator.eval(actionWrapper.getColumnarBatch()),
                       "Evaluating the commit timestamp expression");
 
-              return actionWrapper
-                  .getColumnarBatch()
-                  .withNewColumn(0, COMMIT_VERSION_STRUCT_FIELD, commitVersionVector)
-                  .withNewColumn(1, COMMIT_TIMESTAMP_STRUCT_FIELD, commitTimestampVector);
+              return actionWrapper.getColumnarBatch();
             });
   }
 

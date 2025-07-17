@@ -1,5 +1,21 @@
+/*
+ * Copyright (2024) The Delta Lake Project Authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package io.delta.dsv2.read;
 
+import io.delta.kernel.ResolvedTable;
 import io.delta.kernel.Scan;
 import io.delta.kernel.data.FilteredColumnarBatch;
 import io.delta.kernel.data.Row;
@@ -11,9 +27,11 @@ import java.util.List;
 import org.apache.spark.sql.connector.read.Batch;
 import org.apache.spark.sql.connector.read.InputPartition;
 import org.apache.spark.sql.connector.read.PartitionReaderFactory;
+import org.apache.spark.sql.connector.read.streaming.MicroBatchStream;
 import org.apache.spark.sql.types.StructType;
 
 public class DeltaScan implements org.apache.spark.sql.connector.read.Scan, Batch {
+  private final ResolvedTable table;
   private final Scan kernelScan;
   private final Engine tableEngine;
   private final StructType sparkReadSchema;
@@ -24,12 +42,14 @@ public class DeltaScan implements org.apache.spark.sql.connector.read.Scan, Batc
   private InputPartition[] cachedPartitions;
 
   public DeltaScan(
+      ResolvedTable table,
       Scan kernelScan,
       Engine tableEngine,
       StructType sparkReadSchema,
       String accessKey,
       String secretKey,
       String sessionToken) {
+    this.table = table;
     this.kernelScan = kernelScan;
     this.tableEngine = tableEngine;
     this.sparkReadSchema = sparkReadSchema;
@@ -37,6 +57,12 @@ public class DeltaScan implements org.apache.spark.sql.connector.read.Scan, Batc
     this.accessKey = accessKey;
     this.secretKey = secretKey;
     this.sessionToken = sessionToken;
+  }
+
+  @Override
+  public MicroBatchStream toMicroBatchStream(String checkpointLocation) {
+    return new DeltaMicroBatchStream(
+        tableEngine, table, checkpointLocation, accessKey, secretKey, sessionToken);
   }
 
   /**

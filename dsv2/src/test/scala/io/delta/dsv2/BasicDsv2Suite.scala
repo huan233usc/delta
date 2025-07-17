@@ -1,9 +1,11 @@
 package io.delta.dsv2
-import  java.util.UUID
+import java.util.UUID
+
 import io.delta.sql.DeltaSparkSessionExtension
+
 import org.apache.spark.SparkConf
+import org.apache.spark.sql.{functions, QueryTest, SparkSession}
 import org.apache.spark.sql.functions.{col, lit}
-import org.apache.spark.sql.{QueryTest, SparkSession, functions}
 import org.apache.spark.sql.internal.{SQLConf, StaticSQLConf}
 import org.apache.spark.sql.test.SharedSparkSession
 
@@ -11,9 +13,7 @@ class Dsv2BasicSuite extends QueryTest with SharedSparkSession {
 
   test("test reading using dsv2") {
     val conf = new SparkConf()
-      .set("spark.sql.catalog.dsv2", "io.delta.dsv2.catalog.SimpleUnityCatalog")
-      .set("spark.sql.catalog.dsv2.uri", "mask")
-      .set("spark.sql.catalog.dsv2.token", "mask")
+      .set("spark.sql.catalog.uc", "io.unitycatalog.spark.UCSingleCatalog")
       .set("spark.sql.catalog.dsv2.warehouse", "managed_iceberg_bugbash_pupr")
 
     val sparkSession = SparkSession.builder().config(conf).getOrCreate()
@@ -27,8 +27,7 @@ class Dsv2BasicSuite extends QueryTest with SharedSparkSession {
 
     // Calculate column widths for formatting
     val dataValues = rows.map(row =>
-      (0 until row.length).map(i => if (row.isNullAt(i)) "null" else row.get(i).toString)
-    )
+      (0 until row.length).map(i => if (row.isNullAt(i)) "null" else row.get(i).toString))
     val columnWidths = columnNames.zipWithIndex.map { case (name, i) =>
       val valueWidth = if (dataValues.isEmpty) 0 else dataValues.map(_(i).length).max
       math.max(name.length, valueWidth) + 2 // add padding

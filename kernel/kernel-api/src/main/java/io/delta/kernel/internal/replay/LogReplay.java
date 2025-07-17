@@ -229,6 +229,31 @@ public class LogReplay {
     return new ActiveAddFilesIterator(engine, addRemoveIter, dataPath, scanMetrics);
   }
 
+  public CloseableIterator<FilteredColumnarBatch> getAddFilesAsColumnarBatches(
+      Engine engine,
+      boolean shouldReadStats,
+      Optional<Predicate> checkpointPredicate,
+      ScanMetrics scanMetrics,
+      long start,
+      long end) {
+    // We do not need to look at any `remove` files from the checkpoints. Skip the column to save
+    // I/O. Note that we are still going to process the row groups. Adds and removes are randomly
+    // scattered through checkpoint part files, so row group push down is unlikely to be useful.
+    final CloseableIterator<ActionWrapper> addRemoveIter =
+        new ActionsIterator(
+            engine,
+            getLogSegment().allLogFilesReversed().stream()
+                .filter(
+                    f ->
+                        FileNames.getFileVersion(new Path(f.getPath())) > start
+                            && FileNames.getFileVersion(new Path(f.getPath())) <= end)
+                .collect(Collectors.toList()),
+            getAddRemoveReadSchema(shouldReadStats),
+            getAddReadSchema(shouldReadStats),
+            checkpointPredicate);
+    return new ActiveAddFilesIterator(engine, addRemoveIter, dataPath, scanMetrics);
+  }
+
   ////////////////////
   // Helper Methods //
   ////////////////////

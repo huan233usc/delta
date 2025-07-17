@@ -105,6 +105,75 @@ public class ScanImpl implements Scan {
     return getScanFiles(engine, false);
   }
 
+  public CloseableIterator<FilteredColumnarBatch> getScanFiles(
+      Engine engine, boolean includeStats, long start, long end) {
+    if (accessedScanFiles) {
+      throw new IllegalStateException("Scan files are already fetched from this instance");
+    }
+    accessedScanFiles = true;
+
+    // Generate data skipping filter and decide if we should read the stats column
+    Optional<DataSkippingPredicate> dataSkippingFilter = getDataSkippingFilter();
+    boolean hasDataSkippingFilter = dataSkippingFilter.isPresent();
+    boolean shouldReadStats = hasDataSkippingFilter || includeStats;
+
+    Timer.Timed planningDuration = scanMetrics.totalPlanningTimer.start();
+    // ScanReportReporter stores the current context and can be invoked (in the future) with
+    // `reportError` or `reportSuccess` to stop the planning duration timer and push a report to
+    // the engine
+    ScanReportReporter reportReporter =
+        (exceptionOpt, isFullyConsumed) -> {
+          planningDuration.stop();
+          ScanReport scanReport =
+              new ScanReportImpl(
+                  dataPath.toString() /* tablePath */,
+                  logReplay.getVersion() /* table version */,
+                  snapshotSchema,
+                  snapshotReport.getReportUUID(),
+                  filter,
+                  readSchema,
+                  getPartitionsFilters() /* partitionPredicate */,
+                  dataSkippingFilter.map(p -> p),
+                  isFullyConsumed,
+                  scanMetrics,
+                  exceptionOpt);
+          engine.getMetricsReporters().forEach(reporter -> reporter.report(scanReport));
+        };
+
+    try {
+      // Get active AddFiles via log replay
+      // If there is a partition predicate, construct a predicate to prune checkpoint files
+      // while constructing the table state.
+      CloseableIterator<FilteredColumnarBatch> scanFileIter =
+          logReplay.getAddFilesAsColumnarBatches(
+              engine,
+              shouldReadStats,
+              getPartitionsFilters()
+                  .map(
+                      predicate ->
+                          rewritePartitionPredicateOnCheckpointFileSchema(
+                              predicate, partitionColToStructFieldMap.get())),
+              scanMetrics,
+              start,
+              end);
+
+      // Apply partition pruning
+      scanFileIter = applyPartitionPruning(engine, scanFileIter);
+
+      // Apply data skipping
+      if (hasDataSkippingFilter) {
+        // there was a usable data skipping filter --> apply data skipping
+        scanFileIter = applyDataSkipping(engine, scanFileIter, dataSkippingFilter.get());
+      }
+
+      // TODO when !includeStats drop the stats column if present before returning
+      return wrapWithMetricsReporting(scanFileIter, reportReporter);
+
+    } catch (Exception e) {
+      reportReporter.reportError(e);
+      throw e;
+    }
+  }
   /**
    * Get an iterator of data files in this version of scan that survived the predicate pruning.
    *

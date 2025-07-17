@@ -50,7 +50,7 @@ val all_scala_versions = Seq(scala212, scala213)
 // sbt 'set default_scala_version := 2.13.13' [commands]
 // FIXME Why not use scalaVersion?
 val default_scala_version = settingKey[String]("Default Scala version")
-Global / default_scala_version := scala213
+Global / default_scala_version := scala212
 
 val LATEST_RELEASED_SPARK_VERSION = "3.5.3"
 val SPARK_MASTER_VERSION = "4.0.1-SNAPSHOT"
@@ -434,6 +434,9 @@ lazy val deltaSuiteGenerator = (project in file("spark/delta-suite-generator"))
 
 lazy val spark = (project in file("spark"))
   .dependsOn(storage)
+  .dependsOn(sparkDsv2)
+  .dependsOn(kernelApi)
+  .dependsOn(kernelDefaults)
   .enablePlugins(Antlr4Plugin)
   .disablePlugins(JavaFormatterPlugin, ScalafmtPlugin)
   .settings (
@@ -473,6 +476,7 @@ lazy val spark = (project in file("spark"))
       "org.apache.httpcomponents" % "httpcore" % "4.4.15",
       "commons-codec" % "commons-codec" % "1.15",
       "org.mockito" % "mockito-inline" % "4.11.0" % "test",
+      "io.unitycatalog" % "unitycatalog-client" % "0.2.1" % "test",
     ),
     Compile / packageBin / mappings := (Compile / packageBin / mappings).value ++
         listPythonFiles(baseDirectory.value.getParentFile / "python"),
@@ -687,7 +691,6 @@ lazy val kernelDefaults = (project in file("kernel/kernel-defaults"))
   .dependsOn(kernelApi % "test->test")
   .dependsOn(storage)
   .dependsOn(storage % "test->test") // Required for InMemoryCommitCoordinator for tests
-  .dependsOn(spark % "test->test")
   .dependsOn(goldenTables % "test")
   .settings(
     name := "delta-kernel-defaults",
@@ -720,6 +723,7 @@ lazy val kernelDefaults = (project in file("kernel/kernel-defaults"))
       "org.apache.spark" %% "spark-sql" % defaultSparkVersion % "test" classifier "tests",
       "org.apache.spark" %% "spark-core" % defaultSparkVersion % "test" classifier "tests",
       "org.apache.spark" %% "spark-catalyst" % defaultSparkVersion % "test" classifier "tests",
+      "io.delta" %% "delta-spark" % "3.3.0" % "test",
     ),
     javaCheckstyleSettings("dev/kernel-checkstyle.xml"),
       // Unidoc settings
@@ -732,7 +736,6 @@ lazy val sparkDsv2 = (project in file("dsv2"))
   .dependsOn(kernelDefaults)
   .dependsOn(unity)
   .dependsOn(storage)
-  .dependsOn(spark % "test->test")
   .settings(
     name := "delta-spark-dsv2",
     commonSettings,
@@ -752,7 +755,8 @@ lazy val sparkDsv2 = (project in file("dsv2"))
       "org.apache.spark" %% "spark-catalyst" % "3.5.6" % "test" classifier "tests",
       "org.apache.spark" %% "spark-core" % "3.5.6" % "test" classifier "tests",
       "org.apache.spark" %% "spark-sql" % "3.5.6" % "test" classifier "tests",
-      "org.apache.spark" %% "spark-hive" % "3.5.6" % "test" classifier "tests"
+      "org.apache.spark" %% "spark-hive" % "3.5.6" % "test" classifier "tests",
+      "io.delta" %% "delta-spark" % "3.3.0" % "test"
     )
   )
 lazy val unity = (project in file("unity"))
@@ -1473,7 +1477,6 @@ lazy val compatibility = (project in file("connectors/oss-compatibility-tests"))
  */
 
 lazy val goldenTables = (project in file("connectors/golden-tables"))
-  .dependsOn(spark % "test") // depends on delta-spark
   .disablePlugins(JavaFormatterPlugin, ScalafmtPlugin)
   .settings(
     name := "golden-tables",
@@ -1486,7 +1489,8 @@ lazy val goldenTables = (project in file("connectors/golden-tables"))
       "org.apache.spark" %% "spark-sql" % defaultSparkVersion % "test",
       "org.apache.spark" %% "spark-catalyst" % defaultSparkVersion % "test" classifier "tests",
       "org.apache.spark" %% "spark-core" % defaultSparkVersion % "test" classifier "tests",
-      "org.apache.spark" %% "spark-sql" % defaultSparkVersion % "test" classifier "tests"
+      "org.apache.spark" %% "spark-sql" % defaultSparkVersion % "test" classifier "tests",
+      "io.delta" %% "delta-spark" % "3.3.0" % "test"
     )
   )
 

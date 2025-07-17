@@ -9,7 +9,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
-import org.apache.spark.sql.connector.catalog.Identifier;
 import org.apache.spark.sql.connector.catalog.SupportsRead;
 import org.apache.spark.sql.connector.catalog.Table;
 import org.apache.spark.sql.connector.catalog.TableCapability;
@@ -22,26 +21,26 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap;
 public class DeltaCcv2Table implements Table, SupportsRead {
 
   private final ResolvedTable resolvedTable;
-  private final Identifier tableIdentifier;
   private Engine kernelEngine;
   // Hack fields for credentials
   private final String accessKey;
   private final String secretKey;
   private final String sessionToken;
+  private final String tableName;
 
   public DeltaCcv2Table(
       ResolvedTable resolvedTable,
-      Identifier tableIdentifier,
+      String tableName,
       Engine kernelEngine,
       String accessKey,
       String secretKey,
       String sessionToken) {
     this.resolvedTable = resolvedTable;
-    this.tableIdentifier = tableIdentifier;
     this.kernelEngine = kernelEngine;
     this.accessKey = accessKey;
     this.secretKey = secretKey;
     this.sessionToken = sessionToken;
+    this.tableName = tableName;
   }
 
   @Override
@@ -51,7 +50,7 @@ public class DeltaCcv2Table implements Table, SupportsRead {
 
   @Override
   public String name() {
-    return tableIdentifier.name();
+    return tableName + "kernel";
   }
 
   // TODO: this is deprecated product.
@@ -64,6 +63,7 @@ public class DeltaCcv2Table implements Table, SupportsRead {
   public Set<TableCapability> capabilities() {
     Set<TableCapability> capabilities = new HashSet<>();
     capabilities.add(TableCapability.BATCH_READ);
+    capabilities.add(TableCapability.MICRO_BATCH_READ);
     return capabilities;
   }
 

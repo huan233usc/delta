@@ -16,6 +16,9 @@
 
 package org.apache.spark.sql.delta.sources
 
+import org.apache.spark.sql.connector.catalog.{Identifier, SupportsCatalogOptions}
+import org.apache.spark.sql.delta.catalog.CatalogResolver
+
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.util.{Failure, Success, Try}
@@ -50,7 +53,7 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap
 /** A DataSource V1 for integrating Delta into Spark SQL batch and Streaming APIs. */
 class DeltaDataSource
   extends RelationProvider
-  with StreamSourceProvider
+//  with StreamSourceProvider
   with StreamSinkProvider
   with CreatableRelationProviderShim
   with DataSourceRegister
@@ -68,10 +71,20 @@ class DeltaDataSource
     val options = new CaseInsensitiveStringMap(properties)
     val path = options.get("path")
     if (path == null) throw DeltaErrors.pathNotSpecifiedException
-    DeltaTableV2(SparkSession.active, new Path(path), options = options.asScala.toMap)
+    logWarning("path:" + path)
+    if(!path.contains(".")) {
+        return DeltaTableV2(SparkSession.active, new Path(path), options = options.asScala.toMap)
+    }
+    val spark = SparkSession.active
+    val parts = spark.sessionState.sqlParser.parseMultipartIdentifier(path)
+    logWarning("parts:" + parts)
+    assert(parts.length == 3)
+    val (catalog, ident) =
+      CatalogResolver.getCatalogPluginAndIdentifier(spark, parts.head, parts.tail)
+    CatalogResolver.getDeltaTableFromCatalog(spark, catalog, ident).kernelTable.get
   }
 
-  override def sourceSchema(
+  def sourceSchema(
       sqlContext: SQLContext,
       schema: Option[StructType],
       providerName: String,
@@ -127,7 +140,7 @@ class DeltaDataSource
     }
   }
 
-  override def createSource(
+  def createSource(
       sqlContext: SQLContext,
       metadataPath: String,
       schema: Option[StructType],
@@ -271,7 +284,6 @@ class DeltaDataSource
   override def shortName(): String = {
     DeltaSourceUtils.ALT_NAME
   }
-
 }
 
 object DeltaDataSource extends DatabricksLogging {

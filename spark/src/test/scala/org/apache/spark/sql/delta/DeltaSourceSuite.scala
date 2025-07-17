@@ -21,14 +21,12 @@ import java.net.URI
 import java.sql.Timestamp
 import java.util.UUID
 import java.util.concurrent.TimeoutException
-
 import scala.concurrent.duration._
 import scala.language.implicitConversions
-
 import org.apache.spark.sql.delta.DataFrameUtils
 import org.apache.spark.sql.delta.DeltaTestUtils.modifyCommitTimestamp
 import org.apache.spark.sql.delta.actions.{AddFile, Protocol}
-import org.apache.spark.sql.delta.sources.{DeltaSourceOffset, DeltaSQLConf}
+import org.apache.spark.sql.delta.sources.{DeltaSQLConf, DeltaSourceOffset}
 import org.apache.spark.sql.delta.test.DeltaSQLCommandTest
 import org.apache.spark.sql.delta.test.DeltaTestImplicits._
 import org.apache.spark.sql.delta.util.{FileNames, JsonUtils}
@@ -36,9 +34,8 @@ import org.apache.commons.io.FileUtils
 import org.apache.commons.lang3.exception.ExceptionUtils
 import org.apache.hadoop.fs.{FileStatus, Path, RawLocalFileSystem}
 import org.scalatest.time.{Seconds, Span}
-
-import org.apache.spark.SparkThrowable
-import org.apache.spark.sql.{AnalysisException, DataFrame, Dataset, Row}
+import org.apache.spark.{SparkConf, SparkThrowable}
+import org.apache.spark.sql.{AnalysisException, DataFrame, Dataset, Row, SparkSession}
 import org.apache.spark.sql.catalyst.TableIdentifier
 import org.apache.spark.sql.catalyst.util.IntervalUtils
 import org.apache.spark.sql.execution.streaming._
@@ -230,9 +227,9 @@ class DeltaSourceSuite extends DeltaSourceSuiteBase
       testStream(df)(
         AssertOnQuery { q => q.processAllAvailable(); true },
         AssertOnQuery { q =>
-          val offset = q.committedOffsets.iterator.next()._2.asInstanceOf[DeltaSourceOffset]
-          assert(offset.reservoirVersion === 2)
-          assert(offset.index === DeltaSourceOffset.BASE_INDEX)
+          val offset = q.committedOffsets.iterator.next()._2.asInstanceOf[LongOffset]
+          assert(offset.offset === 1)
+//          assert(offset.index === DeltaSourceOffset.BASE_INDEX)
           true
         },
         CheckAnswer("keep1", "keep2"),

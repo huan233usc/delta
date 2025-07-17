@@ -16,6 +16,10 @@
 
 package org.apache.spark.sql.delta.catalog
 
+import io.delta.kernel.TableManager
+import io.delta.kernel.defaults.engine.DefaultEngine
+import org.apache.hadoop.conf.Configuration
+
 import java.{util => ju}
 
 // scalastyle:off import.ordering.noEmptyLine
@@ -34,6 +38,7 @@ import org.apache.spark.sql.delta.sources.{DeltaDataSource, DeltaSourceUtils}
 import org.apache.spark.sql.delta.sources.DeltaSQLConf
 import org.apache.spark.sql.delta.sources.DeltaSQLConf.ENABLE_TABLE_REDIRECT_FEATURE
 import org.apache.hadoop.fs.Path
+import io.delta.dsv2.table.DeltaCcv2Table
 
 import org.apache.spark.sql.{DataFrame, Dataset, SaveMode, SparkSession}
 import org.apache.spark.sql.catalyst.TableIdentifier
@@ -78,6 +83,33 @@ class DeltaTableV2 private[delta](
       private[delta] var partitionFilters: Seq[(String, String)],
       private[delta] var timeTravelByPath: Option[DeltaTimeTravelSpec]
   )
+
+
+   lazy val kernelTable: Option[DeltaCcv2Table] = {
+    logWarning(catalogTable.toString)
+     val conf = new Configuration
+
+     // Set up base configuration// Set up base configuration
+     conf.set("fs.s3.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+     // S3 credentials// S3 credentials
+     conf.set("fs.s3a.access.key", catalogTable.get.storage.properties("fs.s3a.access.key"))
+     conf.set("fs.s3a.secret.key", catalogTable.get.storage.properties("fs.s3a.secret.key"))
+     conf.set("fs.s3a.session.token", catalogTable.get.storage.properties("fs.s3a.session.token"))
+     conf.set("fs.s3a.path.style.access", "true")
+     conf.set("fs.s3.impl.disable.cache", "true")
+     conf.set("fs.s3a.impl.disable.cache", "true")
+
+
+    val engine = DefaultEngine.create(conf)
+    val resolvedTable = TableManager.loadTable(path.toString).build(engine)
+    // scalastyle:off println
+    println("to dsv2 for table" + name())
+    // scalastyle:on println
+    Some(new DeltaCcv2Table(resolvedTable, name(), engine,
+      catalogTable.get.storage.properties("fs.s3a.access.key"),
+      catalogTable.get.storage.properties("fs.s3a.secret.key"),
+      catalogTable.get.storage.properties("fs.s3a.session.token")))
+  }
 
   private lazy val pathInfo: PathInfo = {
     if (catalogTable.isDefined) {
@@ -250,7 +282,7 @@ class DeltaTableV2 private[delta](
 
   override def capabilities(): ju.Set[TableCapability] = Set(
     ACCEPT_ANY_SCHEMA, BATCH_READ,
-    V1_BATCH_WRITE, OVERWRITE_BY_FILTER, TRUNCATE, OVERWRITE_DYNAMIC
+    V1_BATCH_WRITE, OVERWRITE_BY_FILTER, TRUNCATE, OVERWRITE_DYNAMIC, MICRO_BATCH_READ
   ).asJava
 
   def tableExists: Boolean = deltaLog.tableExists
