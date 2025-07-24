@@ -56,6 +56,7 @@ val LATEST_RELEASED_SPARK_VERSION = "3.5.3"
 val SPARK_MASTER_VERSION = "4.0.1-SNAPSHOT"
 val sparkVersion = settingKey[String]("Spark version")
 spark / sparkVersion := getSparkVersion()
+sparkDsv2 / sparkVersion := getSparkVersion()
 connectCommon / sparkVersion := getSparkVersion()
 connectClient / sparkVersion := getSparkVersion()
 connectServer / sparkVersion := getSparkVersion()
@@ -714,6 +715,32 @@ lazy val kernelDefaults = (project in file("kernel/kernel-defaults"))
       // Unidoc settings
     unidocSourceFilePatterns += SourceFilePattern("io/delta/kernel/"),
   ).configureUnidoc(docTitle = "Delta Kernel Defaults")
+
+
+lazy val sparkDsv2 = (project in file("spark-dsv2"))
+  .enablePlugins(ScalafmtPlugin)
+  .dependsOn(kernelApi)
+  .dependsOn(kernelDefaults)
+  .dependsOn(spark % "test->test")
+  .settings(
+    name := "delta-spark-dsv2",
+    commonSettings,
+    Test / javaOptions ++= Seq("-ea"),
+    // This allows generating tables with unsupported test table features in delta-spark
+    Test / envVars += ("DELTA_TESTING", "1"),
+    libraryDependencies ++= Seq(
+      "org.apache.spark" %% "spark-hive" % sparkVersion.value % "provided",
+      "org.apache.spark" %% "spark-sql" % sparkVersion.value % "provided",
+      "org.apache.spark" %% "spark-core" % sparkVersion.value % "provided",
+      "org.apache.spark" %% "spark-catalyst" % sparkVersion.value % "provided",
+
+      "org.scalatest" %% "scalatest" % scalaTestVersion % "test",
+    ),
+    // Unidoc settings
+    unidocSourceFilePatterns := Seq(SourceFilePattern("io/delta/spark/dsv2/"))
+  ).configureUnidoc(
+    generatedJavaDoc = getSparkVersion() == LATEST_RELEASED_SPARK_VERSION,
+    generateScalaDoc = getSparkVersion() == LATEST_RELEASED_SPARK_VERSION)
 
 lazy val unity = (project in file("unity"))
   .enablePlugins(ScalafmtPlugin)
