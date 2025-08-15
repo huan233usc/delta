@@ -17,6 +17,7 @@ package io.delta.kernel.expressions;
 
 import io.delta.kernel.annotation.Evolving;
 import io.delta.kernel.engine.ExpressionHandler;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
@@ -106,6 +107,11 @@ import java.util.stream.Stream;
  *         <li>SQL semantic: <code>expr STARTS_WITH expr</code>
  *         <li>Since version: 3.4.0
  *       </ul>
+ *   <li>Name: <code>IN</code>
+ *       <ul>
+ *         <li>SQL semantic: <code>expr IN (expr1, expr2, ...)</code>
+ *         <li>Since version: 3.5.0
+ *       </ul>
  * </ol>
  *
  * @since 3.0.0
@@ -126,10 +132,29 @@ public class Predicate extends ScalarExpression {
     this(name, Arrays.asList(left, right));
   }
 
+  /** Constructor for an IN Predicate expression */
+  public static Predicate in(Expression left, List<Expression> inList) {
+    List<Expression> children = new ArrayList<>();
+    children.add(left);
+    children.addAll(inList);
+    return new Predicate("IN", children);
+  }
+
+  /** Constructor for an IN Predicate expression with varargs */
+  public static Predicate in(Expression left, Expression... inValues) {
+    return in(left, Arrays.asList(inValues));
+  }
+
   @Override
   public String toString() {
     if (BINARY_OPERATORS.contains(name)) {
       return String.format("(%s %s %s)", children.get(0), name, children.get(1));
+    } else if ("IN".equals(name) && children.size() >= 2) {
+      String inValues =
+          children.subList(1, children.size()).stream()
+              .map(Object::toString)
+              .collect(Collectors.joining(", "));
+      return String.format("(%s IN (%s))", children.get(0), inValues);
     }
     return super.toString();
   }

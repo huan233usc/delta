@@ -64,6 +64,11 @@ trait ExpressionSuiteBase extends TestUtils with DefaultVectorTestUtils {
     new Predicate("starts_with", left, right)
   }
 
+  protected def in(value: Expression, inList: Expression*): Predicate = {
+    val children = List(value) ++ inList.toList
+    new Predicate("in", children.asJava)
+  }
+
   protected def comparator(symbol: String, left: Expression, right: Expression): Predicate = {
     new Predicate(symbol, left, right)
   }
