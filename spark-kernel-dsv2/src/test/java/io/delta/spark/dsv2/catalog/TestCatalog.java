@@ -23,12 +23,15 @@ import io.delta.kernel.internal.SnapshotImpl;
 import io.delta.kernel.utils.CloseableIterable;
 import io.delta.spark.dsv2.table.DeltaKernelTable;
 import io.delta.spark.dsv2.utils.SchemaUtils;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
 import org.apache.spark.sql.catalyst.analysis.NoSuchTableException;
 import org.apache.spark.sql.connector.catalog.Identifier;
 import org.apache.spark.sql.connector.catalog.Table;
@@ -68,18 +71,26 @@ public class TestCatalog implements TableCatalog {
 
   @Override
   public Table loadTable(Identifier ident) throws NoSuchTableException {
+    // First try to load as a catalog table
     String tableKey = getTableKey(ident);
     String tablePath = tablePaths.get(tableKey);
-    if (tablePath == null) {
-      throw new NoSuchTableException(ident);
+
+    if (tablePath != null) {
+      try {
+        // Use TableManager.loadTable to load the catalog table
+        SnapshotImpl snapshot = (SnapshotImpl) TableManager.loadSnapshot(tablePath).build(engine);
+        return new DeltaKernelTable(ident, snapshot);
+      } catch (Exception e) {
+        throw new RuntimeException("Failed to load table: " + ident, e);
+      }
     }
-    try {
-      // Use TableManager.loadTable to load the table
-      SnapshotImpl snapshot = (SnapshotImpl) TableManager.loadSnapshot(tablePath).build(engine);
-      return new DeltaKernelTable(ident, snapshot);
-    } catch (Exception e) {
-      throw new RuntimeException("Failed to load table: " + ident, e);
+
+    // If not found as catalog table, check if it's a path-based table
+    if (isPathIdentifier(ident)) {
+      return newDeltaPathTable(ident);
     }
+
+    throw new NoSuchTableException(ident);
   }
 
   @Override
@@ -110,7 +121,7 @@ public class TestCatalog implements TableCatalog {
 
       // Load the created table and return DeltaKernelTable
       SnapshotImpl snapshot = (SnapshotImpl) kernelTable.getLatestSnapshot(engine);
-      return new DeltaKernelTable(ident, snapshot);
+      return new DeltaKernelTable(ident, snapshot, new Configuration());
 
     } catch (Exception e) {
       // Remove the table entry if creation fails
@@ -145,6 +156,58 @@ public class TestCatalog implements TableCatalog {
   @Override
   public String name() {
     return catalogName;
+  }
+
+  @Override
+  public boolean tableExists(Identifier ident) {
+    // First check if it exists as a catalog table
+    String tableKey = getTableKey(ident);
+    if (tablePaths.containsKey(tableKey)) {
+      return true;
+    }
+
+    // If it's a path identifier, check if the path exists
+    if (isPathIdentifier(ident)) {
+      try {
+        Path path = new Path(ident.name());
+        FileSystem fs = path.getFileSystem(new Configuration());
+        return fs.exists(path) && fs.listStatus(path).length > 0;
+      } catch (IOException | IllegalArgumentException e) {
+        return false;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Check if the identifier represents a path-based table. A path identifier has: 1. namespace
+   * containing "delta" 2. name that is an absolute path
+   */
+  protected boolean isPathIdentifier(Identifier ident) {
+    try {
+      // Check if namespace contains "delta"
+      boolean hasDeltaNamespace =
+          ident.namespace().length == 1 && "delta".equalsIgnoreCase(ident.namespace()[0]);
+
+      // Check if name is an absolute path
+      boolean isAbsolutePath = new Path(ident.name()).isAbsolute();
+
+      return hasDeltaNamespace && isAbsolutePath;
+    } catch (IllegalArgumentException e) {
+      return false;
+    }
+  }
+
+  /** Create a new path-based Delta table. */
+  protected Table newDeltaPathTable(Identifier ident) {
+    try {
+      String tablePath = ident.name();
+      SnapshotImpl snapshot = (SnapshotImpl) TableManager.loadSnapshot(tablePath).build(engine);
+      return new DeltaKernelTable(ident, snapshot, new Configuration());
+    } catch (Exception e) {
+      throw new RuntimeException("Failed to load Delta table from path: " + ident.name(), e);
+    }
   }
 
   /** Helper method to get the table key from identifier. */

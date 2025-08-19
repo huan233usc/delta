@@ -18,6 +18,12 @@ package io.delta.spark.dsv2.scan;
 import static java.util.Objects.requireNonNull;
 
 import io.delta.kernel.Scan;
+import io.delta.kernel.defaults.engine.DefaultEngine;
+import io.delta.kernel.engine.Engine;
+import io.delta.spark.dsv2.scan.batch.KernelSparkBatchScan;
+import io.delta.spark.dsv2.scan.batch.KernelSparkScanContext;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.spark.sql.connector.read.Batch;
 import org.apache.spark.sql.types.StructType;
 
 /**
@@ -26,12 +32,15 @@ import org.apache.spark.sql.types.StructType;
  */
 public class KernelSparkScan implements org.apache.spark.sql.connector.read.Scan {
 
-  private final Scan kernelScan;
   private final StructType sparkReadSchema;
+  private transient KernelSparkScanContext kernelSparkScanContext;
 
   public KernelSparkScan(Scan kernelScan, StructType sparkReadSchema) {
-    this.kernelScan = requireNonNull(kernelScan, "kernelScan is null");
     this.sparkReadSchema = requireNonNull(sparkReadSchema, "sparkReadSchema is null");
+    // Create a default engine for the scan context
+    Engine engine = DefaultEngine.create(new Configuration());
+    this.kernelSparkScanContext =
+        new KernelSparkScanContext(requireNonNull(kernelScan, "kernelScan is null"), engine);
   }
 
   @Override
@@ -39,5 +48,8 @@ public class KernelSparkScan implements org.apache.spark.sql.connector.read.Scan
     return sparkReadSchema;
   }
 
-  // TODO: implement toBatch
+  @Override
+  public synchronized Batch toBatch() {
+    return new KernelSparkBatchScan(kernelSparkScanContext);
+  }
 }

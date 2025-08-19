@@ -23,6 +23,8 @@ import java.util.List;
 import java.util.UUID;
 import org.apache.spark.SparkConf;
 import org.apache.spark.sql.*;
+import org.apache.spark.sql.types.DataTypes;
+import org.apache.spark.sql.types.StructType$;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -72,18 +74,59 @@ public class Dsv2BasicTest {
 
   @Test
   public void testBatchRead() {
+    // Create table and insert some data
     spark.sql(
         String.format(
             "CREATE TABLE dsv2.%s.batch_read_test (id INT, name STRING, value DOUBLE)", nameSpace));
-    UnsupportedOperationException e =
-        assertThrows(
-            UnsupportedOperationException.class,
-            () ->
-                spark
-                    .sql(String.format("SELECT * FROM dsv2.%s.batch_read_test", nameSpace))
-                    .show());
-    // TODO: update after implementing batch Scan
-    assertTrue(e.getMessage().contains("Batch scan are not supported"));
+
+    // Insert test data
+    spark.sql(
+        String.format(
+            "INSERT INTO dsv2.%s.batch_read_test VALUES (1, 'Alice', 100.0), (2, 'Bob', 200.0)",
+            nameSpace));
+
+    // Now batch read should work
+    Dataset<Row> result =
+        spark.sql(String.format("SELECT * FROM dsv2.%s.batch_read_test ORDER BY id", nameSpace));
+
+    List<Row> expectedRows =
+        Arrays.asList(RowFactory.create(1, "Alice", 100.0), RowFactory.create(2, "Bob", 200.0));
+
+    assertDatasetEquals(result, expectedRows);
+  }
+
+  @Test
+  public void testPathBasedTable(@TempDir File deltaTablePath) {
+    // Create a Delta table using regular Delta Lake first
+    String tablePath = deltaTablePath.getAbsolutePath();
+
+    // Create test data
+    Dataset<Row> testData =
+        spark.createDataFrame(
+            Arrays.asList(
+                RowFactory.create(1, "Alice", 100.0),
+                RowFactory.create(2, "Bob", 200.0),
+                RowFactory.create(3, "Charlie", 300.0)),
+            StructType$.MODULE$.apply(
+                Arrays.asList(
+                    DataTypes.createStructField("id", DataTypes.IntegerType, false),
+                    DataTypes.createStructField("name", DataTypes.StringType, false),
+                    DataTypes.createStructField("value", DataTypes.DoubleType, false))));
+
+    // Write as Delta table
+    testData.write().format("delta").save(tablePath);
+
+    // Now read it using path-based access through our TestCatalog
+    Dataset<Row> result =
+        spark.sql(String.format("SELECT * FROM dsv2.delta.`%s` ORDER BY id", tablePath));
+
+    List<Row> expectedRows =
+        Arrays.asList(
+            RowFactory.create(1, "Alice", 100.0),
+            RowFactory.create(2, "Bob", 200.0),
+            RowFactory.create(3, "Charlie", 300.0));
+
+    assertDatasetEquals(result, expectedRows);
   }
 
   @Test
