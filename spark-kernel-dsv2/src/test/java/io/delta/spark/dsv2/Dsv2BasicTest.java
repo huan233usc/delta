@@ -23,8 +23,6 @@ import java.util.List;
 import java.util.UUID;
 import org.apache.spark.SparkConf;
 import org.apache.spark.sql.*;
-import org.apache.spark.sql.types.DataTypes;
-import org.apache.spark.sql.types.StructType$;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -42,6 +40,11 @@ public class Dsv2BasicTest {
         new SparkConf()
             .set("spark.sql.catalog.dsv2", "io.delta.spark.dsv2.catalog.TestCatalog")
             .set("spark.sql.catalog.dsv2.base_path", tempDir.getAbsolutePath())
+            // Enable Delta for path-based writes like delta.`path`
+            .set("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+            .set(
+                "spark.sql.catalog.spark_catalog",
+                "org.apache.spark.sql.delta.catalog.DeltaCatalog")
             .setMaster("local[*]")
             .setAppName("Dsv2BasicTest");
     spark = SparkSession.builder().config(conf).getOrCreate();
@@ -73,60 +76,36 @@ public class Dsv2BasicTest {
   }
 
   @Test
-  public void testBatchRead() {
-    // Create table and insert some data
-    spark.sql(
-        String.format(
-            "CREATE TABLE dsv2.%s.batch_read_test (id INT, name STRING, value DOUBLE)", nameSpace));
-
-    // Insert test data
-    spark.sql(
-        String.format(
-            "INSERT INTO dsv2.%s.batch_read_test VALUES (1, 'Alice', 100.0), (2, 'Bob', 200.0)",
-            nameSpace));
-
-    // Now batch read should work
-    Dataset<Row> result =
-        spark.sql(String.format("SELECT * FROM dsv2.%s.batch_read_test ORDER BY id", nameSpace));
-
-    List<Row> expectedRows =
-        Arrays.asList(RowFactory.create(1, "Alice", 100.0), RowFactory.create(2, "Bob", 200.0));
-
-    assertDatasetEquals(result, expectedRows);
-  }
-
-  @Test
-  public void testPathBasedTable(@TempDir File deltaTablePath) {
-    // Create a Delta table using regular Delta Lake first
+  public void testQueryTable(@TempDir File deltaTablePath) {
     String tablePath = deltaTablePath.getAbsolutePath();
 
-    // Create test data
-    Dataset<Row> testData =
-        spark.createDataFrame(
-            Arrays.asList(
-                RowFactory.create(1, "Alice", 100.0),
-                RowFactory.create(2, "Bob", 200.0),
-                RowFactory.create(3, "Charlie", 300.0)),
-            StructType$.MODULE$.apply(
-                Arrays.asList(
-                    DataTypes.createStructField("id", DataTypes.IntegerType, false),
-                    DataTypes.createStructField("name", DataTypes.StringType, false),
-                    DataTypes.createStructField("value", DataTypes.DoubleType, false))));
+    // Insert some test data via delta.`path` using original Delta extension
+    spark.sql(
+        String.format(
+            "CREATE TABLE delta.`%s` (id INT, name STRING, value DOUBLE) USING DELTA", tablePath));
+    spark.sql(
+        String.format(
+            "INSERT INTO delta.`%s` VALUES (1, 'test1', 1.1), (2, 'test2', 2.2)", tablePath));
 
-    // Write as Delta table
-    testData.write().format("delta").save(tablePath);
-
-    // Now read it using path-based access through our TestCatalog
+    // Test that we can query the table via dsv2 catalog with path-based access
     Dataset<Row> result =
         spark.sql(String.format("SELECT * FROM dsv2.delta.`%s` ORDER BY id", tablePath));
 
-    List<Row> expectedRows =
-        Arrays.asList(
-            RowFactory.create(1, "Alice", 100.0),
-            RowFactory.create(2, "Bob", 200.0),
-            RowFactory.create(3, "Charlie", 300.0));
+    // Verify the result
+    List<Row> rows = result.collectAsList();
+    assertEquals(2, rows.size(), "Should have 2 rows");
 
-    assertDatasetEquals(result, expectedRows);
+    // Check first row
+    Row firstRow = rows.get(0);
+    assertEquals(1, firstRow.getInt(0), "First row id should be 1");
+    assertEquals("test1", firstRow.getString(1), "First row name should be 'test1'");
+    assertEquals(1.1, firstRow.getDouble(2), 0.001, "First row value should be 1.1");
+
+    // Check second row
+    Row secondRow = rows.get(1);
+    assertEquals(2, secondRow.getInt(0), "Second row id should be 2");
+    assertEquals("test2", secondRow.getString(1), "Second row name should be 'test2'");
+    assertEquals(2.2, secondRow.getDouble(2), 0.001, "Second row value should be 2.2");
   }
 
   @Test

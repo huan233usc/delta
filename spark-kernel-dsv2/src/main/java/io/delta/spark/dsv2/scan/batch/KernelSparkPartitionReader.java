@@ -24,6 +24,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.spark.sql.catalyst.InternalRow;
 import org.apache.spark.sql.catalyst.expressions.GenericInternalRow;
 import org.apache.spark.sql.connector.read.PartitionReader;
+import org.apache.spark.unsafe.types.UTF8String;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -261,7 +262,7 @@ public class KernelSparkPartitionReader implements PartitionReader<InternalRow> 
     } else if (dataType instanceof io.delta.kernel.types.DoubleType) {
       return columnVector.getDouble(rowIndex);
     } else if (dataType instanceof io.delta.kernel.types.StringType) {
-      return columnVector.getString(rowIndex);
+      return UTF8String.fromString(columnVector.getString(rowIndex));
     } else if (dataType instanceof io.delta.kernel.types.DateType) {
       return columnVector.getInt(rowIndex); // Date as days since epoch
     } else if (dataType instanceof io.delta.kernel.types.TimestampType) {
