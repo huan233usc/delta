@@ -15,7 +15,6 @@
  */
 package io.delta.kernel.defaults.internal.parquet
 
-import java.math.BigDecimal
 import java.nio.file.Files
 import java.sql.Date
 import java.util.Optional
@@ -26,7 +25,7 @@ import io.delta.kernel.expressions._
 import io.delta.kernel.expressions.Literal.{ofBinary, ofBoolean, ofDate, ofDouble, ofFloat, ofInt, ofLong, ofNull, ofString}
 import io.delta.kernel.internal.util.InternalUtils.daysSinceEpoch
 import io.delta.kernel.test.VectorTestUtils
-import io.delta.kernel.types.{DecimalType, IntegerType, StructType}
+import io.delta.kernel.types.{IntegerType, StructType}
 
 import org.apache.spark.sql.{types => sparktypes, Row}
 import org.scalatest.BeforeAndAfterAll
@@ -60,59 +59,6 @@ class ParquetReaderPredicatePushdownSuite extends AnyFunSuite
         .format("delta")
         .mode("append")
         .save(testParquetTable)
-    }
-
-    // Create a separate test table with decimal columns for testing decimal filter pushdown
-    // Build 5 row groups (100 rows each) so we can validate row-group pruning semantics.
-    testDecimalTable = Files.createTempDirectory("decimalTestDir").toString
-
-    val decimalTestSchema = sparktypes.StructType(Seq(
-      sparktypes.StructField("id", sparktypes.IntegerType),
-      sparktypes.StructField("decimal_int32", sparktypes.DecimalType(9, 2)), // stored as INT32
-      sparktypes.StructField("decimal_int64", sparktypes.DecimalType(18, 4)), // stored as INT64
-      sparktypes.StructField(
-        "decimal_binary",
-        sparktypes.DecimalType(25, 5)
-      ) // stored as BINARY/FIXED_LEN_BYTE_ARRAY
-    ))
-
-    def decimalGroupValueInt32(groupIdx: Int): java.math.BigDecimal = groupIdx match {
-      case 0 => null
-      case 1 => BigDecimal.valueOf(234.56)
-      case 2 => BigDecimal.valueOf(345.67)
-      case 3 => BigDecimal.valueOf(456.78)
-      case 4 => BigDecimal.valueOf(567.89)
-    }
-    def decimalGroupValueInt64(groupIdx: Int): java.math.BigDecimal = groupIdx match {
-      case 0 => BigDecimal.valueOf(12345.6789)
-      case 1 => BigDecimal.valueOf(23456.7890)
-      case 2 => BigDecimal.valueOf(34567.8901)
-      case 3 => BigDecimal.valueOf(45678.9012)
-      case 4 => BigDecimal.valueOf(56789.0123)
-    }
-    def decimalGroupValueBinary(groupIdx: Int): java.math.BigDecimal = groupIdx match {
-      case 0 => BigDecimal.valueOf(123456789.12345)
-      case 1 => BigDecimal.valueOf(234567890.23456)
-      case 2 => BigDecimal.valueOf(345678901.34567)
-      case 3 => BigDecimal.valueOf(456789012.45678)
-      case 4 => BigDecimal.valueOf(567890123.56789)
-    }
-
-    val decimalRows = Seq.range(0, 5).flatMap { groupIdx =>
-      Seq.range(groupIdx * 100, (groupIdx + 1) * 100).map { _ =>
-        Row(
-          groupIdx + 1,
-          decimalGroupValueInt32(groupIdx),
-          decimalGroupValueInt64(groupIdx),
-          decimalGroupValueBinary(groupIdx))
-      }
-    }
-
-    val decimalDf = spark.createDataFrame(
-      spark.sparkContext.parallelize(decimalRows),
-      decimalTestSchema)
-    withSQLConf("parquet.block.size" -> 1.toString) {
-      decimalDf.repartition(1).write.format("delta").mode("overwrite").save(testDecimalTable)
     }
   }
 
@@ -499,171 +445,5 @@ class ParquetReaderPredicatePushdownSuite extends AnyFunSuite
     val expOutputRowCount = expRowGroups.length * 100 // 100 rows per row group
     assert(actualData.size === expOutputRowCount, s"predicate: $notPredicate")
     checkAnswer(actualData, generateExpData(expRowGroups))
-  }
-
-  //////////////////////////////////////////////////////////////////////////////////
-  // Decimal type filter pushdown tests
-  //////////////////////////////////////////////////////////////////////////////////
-
-  var testDecimalTable: String = ""
-
-  private def readDecimalTable(predicate: Predicate): Seq[TestRow] = {
-    val readSchema: StructType = tableSchema(testDecimalTable)
-    readParquetFilesUsingKernel(testDecimalTable, readSchema, Optional.of(predicate))
-  }
-
-  test("decimal filter pushdown - INT32 stored decimal equality (row-group prune)") {
-    val decimalPredicate =
-      eq(col("decimal_int32"), Literal.ofDecimal(new BigDecimal("234.56"), 9, 2))
-    val actualData = readDecimalTable(decimalPredicate)
-    // Only group 1 has this value; 1 group * 100 rows
-    assert(actualData.size === 100)
-  }
-
-  test("decimal filter pushdown - INT32 stored decimal greater than (row-group prune)") {
-    val decimalPredicate =
-      gt(col("decimal_int32"), Literal.ofDecimal(new BigDecimal("300.00"), 9, 2))
-    val actualData = readDecimalTable(decimalPredicate)
-    // Groups 2,3,4 qualify => 3 groups * 100 rows
-    assert(actualData.size === 300)
-  }
-
-  test("decimal filter pushdown - INT64 stored decimal less than (row-group prune)") {
-    val decimalPredicate =
-      lt(col("decimal_int64"), Literal.ofDecimal(new BigDecimal("40000.0000"), 18, 4))
-    val actualData = readDecimalTable(decimalPredicate)
-    // Groups 0,1,2 qualify => 3 groups * 100 rows
-    assert(actualData.size === 300)
-  }
-
-  test("decimal filter pushdown - BINARY stored decimal greater than or equal (row-group prune)") {
-    val decimalPredicate =
-      gte(col("decimal_binary"), Literal.ofDecimal(new BigDecimal("300000000.00000"), 25, 5))
-    val actualData = readDecimalTable(decimalPredicate)
-    // Groups 2,3,4 qualify => 3 groups * 100 rows
-    assert(actualData.size === 300)
-  }
-
-  test("decimal filter pushdown - IS NULL on decimal column") {
-    // Build 3 row groups (100 rows each):
-    //  - group 0: all nulls
-    //  - group 1: all non-nulls
-    //  - group 2: mixed nulls/non-nulls
-    val decimalNullTestSchema = sparktypes.StructType(Seq(
-      sparktypes.StructField("id", sparktypes.IntegerType),
-      sparktypes.StructField("decimal_col", sparktypes.DecimalType(10, 2))))
-
-    val rows = Seq.range(0, 3).flatMap { groupIdx =>
-      Seq.range(groupIdx * 100, (groupIdx + 1) * 100).map { rowId =>
-        val v = groupIdx match {
-          case 0 => null
-          case 1 => BigDecimal.valueOf(123.45)
-          case 2 => if (rowId % 2 == 0) null else BigDecimal.valueOf(234.56)
-        }
-        Row(rowId, v)
-      }
-    }
-
-    val tempNullTable = Files.createTempDirectory("decimalNullTestDir").toString
-    val nullDf = spark.createDataFrame(
-      spark.sparkContext.parallelize(rows),
-      decimalNullTestSchema)
-    withSQLConf("parquet.block.size" -> 1.toString) {
-      nullDf.repartition(1).write.format("delta").mode("overwrite").save(tempNullTable)
-    }
-
-    val predicate = isNull(col("decimal_col"))
-    val readSchema: StructType = tableSchema(tempNullTable)
-    val actualData = readParquetFilesUsingKernel(tempNullTable, readSchema, Optional.of(predicate))
-
-    // Expect row groups 0 (all nulls) and 2 (mixed) to be kept: 2 groups * 100 rows
-    assert(actualData.size === 200)
-  }
-
-  //////////////////////////////////////////////////////////////////////////////////
-  // IN expression filter pushdown tests
-  //////////////////////////////////////////////////////////////////////////////////
-
-  test("IN expression filter pushdown - integer values (row-group prune)") {
-    val inPredicate = predicate("IN", col("intCol"), ofInt(20), ofInt(120), ofInt(920))
-    val actualData = readUsingKernel(testParquetTable, inPredicate)
-    // Each chosen value resides in a different row group -> 3 groups * 100 rows
-    assert(actualData.size === 300)
-  }
-
-  test("IN expression filter pushdown - string values (row-group prune)") {
-    val inPredicate = predicate(
-      "IN",
-      col("stringCol"),
-      ofString("%05d".format(100)),
-      ofString("%05d".format(300)),
-      ofString("%05d".format(500)))
-    val actualData = readUsingKernel(testParquetTable, inPredicate)
-
-    // 3 matching row groups -> 3 * 100 rows
-    assert(actualData.size === 300)
-  }
-
-  test("IN expression filter pushdown - decimal values (row-group prune)") {
-    val inPredicate = predicate(
-      "IN",
-      col("decimal_int32"),
-      Literal.ofDecimal(new BigDecimal("123.45"), 9, 2),
-      Literal.ofDecimal(new BigDecimal("345.67"), 9, 2))
-    val actualData = readDecimalTable(inPredicate)
-    // With our decimal table layout: group0 null, group1=234.56, group2=345.67, group3=456.78, group4=567.89
-    // Only 345.67 matches -> 1 row group * 100 rows
-    assert(actualData.size === 100)
-  }
-
-  test("IN expression filter pushdown - boolean values (row-group prune)") {
-    val inPredicate = predicate("IN", col("booleanCol"), ofBoolean(true))
-    val actualData = readUsingKernel(testParquetTable, inPredicate)
-    // Should include multiple row groups; at least one full group (not 0 or 10) -> size multiple of 100
-    assert(actualData.nonEmpty)
-    assert(actualData.size % 100 === 0)
-  }
-
-  test("IN expression filter pushdown - mixed with null values (row-group prune)") {
-    val inPredicate = predicate(
-      "IN",
-      col("intCol"),
-      ofInt(20),
-      ofNull(IntegerType.INTEGER),
-      ofInt(120))
-    val actualData = readUsingKernel(testParquetTable, inPredicate)
-    // Matches row groups for 20 and 120 -> 2 groups * 100 rows
-    assert(actualData.size === 200)
-  }
-
-  test("IN expression filter pushdown - single value (equivalent to equality, row-group prune)") {
-    val inPredicate = predicate("IN", col("intCol"), ofInt(42))
-    val eqPredicate = eq(col("intCol"), ofInt(42))
-
-    val inResult = readUsingKernel(testParquetTable, inPredicate)
-    val eqResult = readUsingKernel(testParquetTable, eqPredicate)
-
-    // Both should prune down to the same row group
-    assert(inResult.size === eqResult.size)
-  }
-
-  test("IN expression filter pushdown - empty values list") {
-    // This tests the edge case where IN has only the column but no values
-    // It should result in an unsupported filter (not pushed down)
-    val inPredicate = predicate("IN", col("intCol"))
-    assertConvertedFilterIsEmpty(inPredicate, testParquetTable)
-
-    val actualData = readUsingKernel(testParquetTable, inPredicate)
-    // Should return all data since filter is not pushed down
-    assert(actualData.size === 2000) // 20 row groups * 100 rows each
-  }
-
-  test("IN expression filter pushdown - non-existent column") {
-    val inPredicate = predicate("IN", col("nonExistentCol"), ofInt(1), ofInt(2))
-    assertConvertedFilterIsEmpty(inPredicate, testParquetTable)
-
-    val actualData = readUsingKernel(testParquetTable, inPredicate)
-    // Should return all data since filter is not pushed down
-    assert(actualData.size === 2000)
   }
 }

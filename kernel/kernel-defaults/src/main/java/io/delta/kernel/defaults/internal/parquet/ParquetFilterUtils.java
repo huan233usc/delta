@@ -18,12 +18,10 @@ package io.delta.kernel.defaults.internal.parquet;
 import static io.delta.kernel.internal.util.ExpressionUtils.*;
 import static io.delta.kernel.internal.util.Preconditions.checkArgument;
 import static org.apache.parquet.filter2.predicate.FilterApi.*;
-import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.*;
 
 import io.delta.kernel.expressions.*;
 import io.delta.kernel.expressions.Column;
 import io.delta.kernel.types.*;
-import java.math.BigDecimal;
 import java.util.*;
 import org.apache.parquet.column.ColumnDescriptor;
 import org.apache.parquet.filter2.compat.FilterCompat.Filter;
@@ -100,25 +98,10 @@ public class ParquetFilterUtils {
   private static boolean canUseLiteral(Literal literal, PrimitiveType parquetType) {
     DataType litType = literal.getDataType();
     LogicalTypeAnnotation logicalType = parquetType.getLogicalTypeAnnotation();
-    // Debug output
-    System.out.println(
-        "DEBUG: canUseLiteral called - litType="
-            + litType.getClass().getSimpleName()
-            + ", parquetType="
-            + parquetType.getPrimitiveTypeName()
-            + ", logicalType="
-            + (logicalType != null ? logicalType.getClass().getSimpleName() : "null")
-            + ", literal value="
-            + literal.getValue());
     switch (parquetType.getPrimitiveTypeName()) {
       case BOOLEAN:
         return litType instanceof BooleanType;
       case INT32:
-        // Handle decimal columns stored as INT32
-        if (logicalType instanceof DecimalLogicalTypeAnnotation && isDecimal(literal)) {
-          return true;
-        }
-        // Handle regular integer columns
         if (!isInteger(literal)) {
           return false;
         }
@@ -128,11 +111,6 @@ public class ParquetFilterUtils {
                 && ((IntLogicalTypeAnnotation) logicalType).getBitWidth() <= 32)
             || logicalType instanceof DateLogicalTypeAnnotation;
       case INT64:
-        // Handle decimal columns stored as INT64
-        if (logicalType instanceof DecimalLogicalTypeAnnotation && isDecimal(literal)) {
-          return true;
-        }
-        // Handle regular long columns
         if (!isLong(literal)) {
           return false;
         }
@@ -147,13 +125,10 @@ public class ParquetFilterUtils {
       case BINARY:
         {
           return isBinary(literal)
-                  &&
-                  // logical type should be binary (null) or string
-                  (logicalType == null || logicalType instanceof StringLogicalTypeAnnotation)
-              || (logicalType instanceof DecimalLogicalTypeAnnotation && isDecimal(literal));
+              &&
+              // logical type should be binary (null) or string
+              (logicalType == null || logicalType instanceof StringLogicalTypeAnnotation);
         }
-      case FIXED_LEN_BYTE_ARRAY:
-        return logicalType instanceof DecimalLogicalTypeAnnotation && isDecimal(literal);
       default:
         return false;
     }
@@ -179,8 +154,6 @@ public class ParquetFilterUtils {
         return convertIsNullIsNotNull(parquetFieldMap, deltaPredicate, false /* isNotNull */);
       case "is_not_null":
         return convertIsNullIsNotNull(parquetFieldMap, deltaPredicate, true /* isNotNull */);
-      case "in":
-        return convertInToParquetFilter(parquetFieldMap, deltaPredicate);
       default:
         return visitUnsupported(deltaPredicate, name + " is not a supported predicate.");
     }
@@ -236,57 +209,33 @@ public class ParquetFilterUtils {
         }
         break;
       case INT32:
-        // Handle decimal columns stored as INT32
-        if (parquetField.logicalType instanceof DecimalLogicalTypeAnnotation
-            && isDecimal(literal)) {
-          return convertDecimalComparator(
-              columnPath,
-              literal,
-              comparator,
-              parquetType,
-              (DecimalLogicalTypeAnnotation) parquetField.logicalType);
-        } else {
-          // Handle regular integer columns
-          IntColumn intColumn = intColumn(columnPath);
-          switch (comparator) {
-            case "=":
-              return Optional.of(FilterApi.eq(intColumn, getInt(literal)));
-            case "<":
-              return Optional.of(FilterApi.lt(intColumn, getInt(literal)));
-            case "<=":
-              return Optional.of(FilterApi.ltEq(intColumn, getInt(literal)));
-            case ">":
-              return Optional.of(FilterApi.gt(intColumn, getInt(literal)));
-            case ">=":
-              return Optional.of(FilterApi.gtEq(intColumn, getInt(literal)));
-          }
+        IntColumn intColumn = intColumn(columnPath);
+        switch (comparator) {
+          case "=":
+            return Optional.of(FilterApi.eq(intColumn, getInt(literal)));
+          case "<":
+            return Optional.of(FilterApi.lt(intColumn, getInt(literal)));
+          case "<=":
+            return Optional.of(FilterApi.ltEq(intColumn, getInt(literal)));
+          case ">":
+            return Optional.of(FilterApi.gt(intColumn, getInt(literal)));
+          case ">=":
+            return Optional.of(FilterApi.gtEq(intColumn, getInt(literal)));
         }
         break;
       case INT64:
-        // Handle decimal columns stored as INT64
-        if (parquetField.logicalType instanceof DecimalLogicalTypeAnnotation
-            && isDecimal(literal)) {
-          return convertDecimalComparator(
-              columnPath,
-              literal,
-              comparator,
-              parquetType,
-              (DecimalLogicalTypeAnnotation) parquetField.logicalType);
-        } else {
-          // Handle regular long columns
-          LongColumn longColumn = longColumn(columnPath);
-          switch (comparator) {
-            case "=":
-              return Optional.of(FilterApi.eq(longColumn, getLong(literal)));
-            case "<":
-              return Optional.of(FilterApi.lt(longColumn, getLong(literal)));
-            case "<=":
-              return Optional.of(FilterApi.ltEq(longColumn, getLong(literal)));
-            case ">":
-              return Optional.of(FilterApi.gt(longColumn, getLong(literal)));
-            case ">=":
-              return Optional.of(FilterApi.gtEq(longColumn, getLong(literal)));
-          }
+        LongColumn longColumn = longColumn(columnPath);
+        switch (comparator) {
+          case "=":
+            return Optional.of(FilterApi.eq(longColumn, getLong(literal)));
+          case "<":
+            return Optional.of(FilterApi.lt(longColumn, getLong(literal)));
+          case "<=":
+            return Optional.of(FilterApi.ltEq(longColumn, getLong(literal)));
+          case ">":
+            return Optional.of(FilterApi.gt(longColumn, getLong(literal)));
+          case ">=":
+            return Optional.of(FilterApi.gtEq(longColumn, getLong(literal)));
         }
         break;
       case FLOAT:
@@ -320,43 +269,19 @@ public class ParquetFilterUtils {
         }
         break;
       case BINARY:
-        // Handle decimal columns stored as BINARY
-        if (parquetField.logicalType instanceof DecimalLogicalTypeAnnotation
-            && isDecimal(literal)) {
-          return convertDecimalComparator(
-              columnPath,
-              literal,
-              comparator,
-              parquetType,
-              (DecimalLogicalTypeAnnotation) parquetField.logicalType);
-        } else {
-          // Handle regular binary/string columns
-          BinaryColumn binaryColumn = binaryColumn(columnPath);
-          Binary binary = getBinary(literal);
-          switch (comparator) {
-            case "=":
-              return Optional.of(FilterApi.eq(binaryColumn, binary));
-            case "<":
-              return Optional.of(FilterApi.lt(binaryColumn, binary));
-            case "<=":
-              return Optional.of(FilterApi.ltEq(binaryColumn, binary));
-            case ">":
-              return Optional.of(FilterApi.gt(binaryColumn, binary));
-            case ">=":
-              return Optional.of(FilterApi.gtEq(binaryColumn, binary));
-          }
-        }
-        break;
-      case FIXED_LEN_BYTE_ARRAY:
-        // Decimal columns stored as FIXED_LEN_BYTE_ARRAY
-        if (parquetField.logicalType instanceof DecimalLogicalTypeAnnotation
-            && isDecimal(literal)) {
-          return convertDecimalComparator(
-              columnPath,
-              literal,
-              comparator,
-              parquetType,
-              (DecimalLogicalTypeAnnotation) parquetField.logicalType);
+        BinaryColumn binaryColumn = binaryColumn(columnPath);
+        Binary binary = getBinary(literal);
+        switch (comparator) {
+          case "=":
+            return Optional.of(FilterApi.eq(binaryColumn, binary));
+          case "<":
+            return Optional.of(FilterApi.lt(binaryColumn, binary));
+          case "<=":
+            return Optional.of(FilterApi.ltEq(binaryColumn, binary));
+          case ">":
+            return Optional.of(FilterApi.gt(binaryColumn, binary));
+          case ">=":
+            return Optional.of(FilterApi.gtEq(binaryColumn, binary));
         }
         break;
     }
@@ -435,8 +360,6 @@ public class ParquetFilterUtils {
       case DOUBLE:
         return createIsNullOrIsNotNullPredicate(doubleColumn(columnPath), isNotNull);
       case BINARY:
-        return createIsNullOrIsNotNullPredicate(binaryColumn(columnPath), isNotNull);
-      case FIXED_LEN_BYTE_ARRAY:
         return createIsNullOrIsNotNullPredicate(binaryColumn(columnPath), isNotNull);
       default:
         return visitUnsupported(
@@ -537,323 +460,5 @@ public class ParquetFilterUtils {
       return Binary.fromConstantByteArray((byte[]) literal.getValue());
     }
     return Binary.fromString((String) literal.getValue());
-  }
-
-  private static boolean isDecimal(Literal literal) {
-    return literal.getDataType() instanceof DecimalType;
-  }
-
-  private static BigDecimal getDecimal(Literal literal) {
-    checkArgument(isDecimal(literal), "Literal is not a decimal: %s", literal);
-    return (BigDecimal) literal.getValue();
-  }
-
-  /**
-   * Converts a BigDecimal to the appropriate format for Parquet filtering based on the primitive
-   * type.
-   */
-  private static Object convertDecimalForParquet(
-      BigDecimal decimal, PrimitiveType primitiveType, DecimalLogicalTypeAnnotation decimalType) {
-    switch (primitiveType.getPrimitiveTypeName()) {
-      case INT32:
-        // For INT32-backed decimals, convert to int after scaling
-        return decimal.unscaledValue().intValue();
-      case INT64:
-        // For INT64-backed decimals, convert to long after scaling
-        return decimal.unscaledValue().longValue();
-      case BINARY:
-      case FIXED_LEN_BYTE_ARRAY:
-        // For binary-backed decimals, convert to binary representation
-        byte[] unscaledBytes = decimal.unscaledValue().toByteArray();
-        return Binary.fromConstantByteArray(unscaledBytes);
-      default:
-        throw new IllegalArgumentException(
-            "Unsupported primitive type for decimal: " + primitiveType.getPrimitiveTypeName());
-    }
-  }
-
-  /** Creates the appropriate filter predicate for decimal comparison operations. */
-  private static Optional<FilterPredicate> convertDecimalComparator(
-      String columnPath,
-      Literal literal,
-      String comparator,
-      PrimitiveType parquetType,
-      DecimalLogicalTypeAnnotation decimalLogicalType) {
-
-    BigDecimal decimalValue = getDecimal(literal);
-    // Debug output
-    System.out.println(
-        "DEBUG: convertDecimalComparator called - column="
-            + columnPath
-            + ", decimal="
-            + decimalValue
-            + ", comparator="
-            + comparator
-            + ", parquetType="
-            + parquetType.getPrimitiveTypeName());
-
-    switch (parquetType.getPrimitiveTypeName()) {
-      case INT32:
-        {
-          IntColumn intColumn = intColumn(columnPath);
-          int intValue =
-              (Integer) convertDecimalForParquet(decimalValue, parquetType, decimalLogicalType);
-          System.out.println(
-              "DEBUG: INT32 decimal conversion - input="
-                  + decimalValue
-                  + ", scale="
-                  + decimalLogicalType.getScale()
-                  + ", precision="
-                  + decimalLogicalType.getPrecision()
-                  + ", converted intValue="
-                  + intValue);
-          switch (comparator) {
-            case "=":
-              System.out.println(FilterApi.eq(intColumn, intValue));
-              return Optional.of(FilterApi.eq(intColumn, intValue));
-            case "<":
-              return Optional.of(FilterApi.lt(intColumn, intValue));
-            case "<=":
-              return Optional.of(FilterApi.ltEq(intColumn, intValue));
-            case ">":
-              return Optional.of(FilterApi.gt(intColumn, intValue));
-            case ">=":
-              return Optional.of(FilterApi.gtEq(intColumn, intValue));
-          }
-        }
-        break;
-      case INT64:
-        {
-          LongColumn longColumn = longColumn(columnPath);
-          long longValue =
-              (Long) convertDecimalForParquet(decimalValue, parquetType, decimalLogicalType);
-          switch (comparator) {
-            case "=":
-              return Optional.of(FilterApi.eq(longColumn, longValue));
-            case "<":
-              return Optional.of(FilterApi.lt(longColumn, longValue));
-            case "<=":
-              return Optional.of(FilterApi.ltEq(longColumn, longValue));
-            case ">":
-              return Optional.of(FilterApi.gt(longColumn, longValue));
-            case ">=":
-              return Optional.of(FilterApi.gtEq(longColumn, longValue));
-          }
-        }
-        break;
-      case BINARY:
-      case FIXED_LEN_BYTE_ARRAY:
-        {
-          BinaryColumn binaryColumn = binaryColumn(columnPath);
-          Binary binaryValue =
-              (Binary) convertDecimalForParquet(decimalValue, parquetType, decimalLogicalType);
-          switch (comparator) {
-            case "=":
-              return Optional.of(FilterApi.eq(binaryColumn, binaryValue));
-            case "<":
-              return Optional.of(FilterApi.lt(binaryColumn, binaryValue));
-            case "<=":
-              return Optional.of(FilterApi.ltEq(binaryColumn, binaryValue));
-            case ">":
-              return Optional.of(FilterApi.gt(binaryColumn, binaryValue));
-            case ">=":
-              return Optional.of(FilterApi.gtEq(binaryColumn, binaryValue));
-          }
-        }
-        break;
-    }
-    return Optional.empty();
-  }
-
-  /**
-   * Converts an IN expression to a Parquet filter by expanding it to a series of OR'ed equality
-   * predicates. For example: "column IN (value1, value2, value3)" becomes "(column = value1) OR
-   * (column = value2) OR (column = value3)".
-   */
-  private static Optional<FilterPredicate> convertInToParquetFilter(
-      Map<Column, ParquetField> parquetFieldMap, Predicate deltaPredicate) {
-
-    List<Expression> children = deltaPredicate.getChildren();
-    if (children.size() < 2) {
-      return visitUnsupported(
-          deltaPredicate, "IN expression requires at least a column and one value.");
-    }
-
-    Expression columnExpr = children.get(0);
-    if (!(columnExpr instanceof Column)) {
-      return visitUnsupported(
-          deltaPredicate, "IN expression must have a column as the first argument.");
-    }
-
-    Column column = (Column) columnExpr;
-    ParquetField parquetField = parquetFieldMap.get(column);
-    if (parquetField == null) {
-      return visitUnsupported(
-          deltaPredicate, "Column used in IN expression does not exist in the parquet file.");
-    }
-
-    // Convert each IN value to an equality predicate
-    List<FilterPredicate> equalityPredicates = new ArrayList<>();
-
-    for (int i = 1; i < children.size(); i++) {
-      Expression valueExpr = children.get(i);
-      if (!(valueExpr instanceof Literal)) {
-        return visitUnsupported(deltaPredicate, "IN expression values must be literals.");
-      }
-
-      Literal literal = (Literal) valueExpr;
-
-      // Skip null values - they don't participate in IN comparisons
-      if (literal.getValue() == null) {
-        continue;
-      }
-
-      // Create an equality predicate for this value
-      Optional<FilterPredicate> equalityPredicate =
-          convertSingleEqualityToParquetFilter(parquetField, column, literal);
-
-      if (equalityPredicate.isPresent()) {
-        equalityPredicates.add(equalityPredicate.get());
-      } else {
-        // If any individual equality predicate can't be converted,
-        // we can't convert the entire IN expression
-        return Optional.empty();
-      }
-    }
-
-    // If no valid predicates were created (e.g., all values were null or unsupported),
-    // return empty
-    if (equalityPredicates.isEmpty()) {
-      return Optional.empty();
-    }
-
-    // Debug: log number of equality predicates and the combined OR structure
-    try {
-      System.out.println(
-          "DEBUG: IN conversion - column="
-              + ColumnPath.get(column.getNames()).toDotString()
-              + ", numValues="
-              + equalityPredicates.size());
-      for (FilterPredicate p : equalityPredicates) {
-        System.out.println("DEBUG: IN equality predicate: " + p);
-      }
-    } catch (Throwable t) {
-      // ignore debug failures
-    }
-
-    // Combine all equality predicates with OR
-    FilterPredicate result = equalityPredicates.get(0);
-    for (int i = 1; i < equalityPredicates.size(); i++) {
-      result = FilterApi.or(result, equalityPredicates.get(i));
-    }
-
-    try {
-      System.out.println("DEBUG: IN combined predicate: " + result);
-    } catch (Throwable t) {
-      // ignore debug failures
-    }
-
-    return Optional.of(result);
-  }
-
-  /**
-   * Creates a single equality predicate for the given column and literal value. This is a helper
-   * method for IN expression conversion.
-   */
-  private static Optional<FilterPredicate> convertSingleEqualityToParquetFilter(
-      ParquetField parquetField, Column column, Literal literal) {
-
-    if (!canUseLiteral(literal, parquetField.primitiveType)) {
-      return Optional.empty();
-    }
-
-    PrimitiveType parquetType = parquetField.primitiveType;
-    String columnPath = ColumnPath.get(column.getNames()).toDotString();
-
-    switch (parquetType.getPrimitiveTypeName()) {
-      case BOOLEAN:
-        BooleanColumn booleanColumn = booleanColumn(columnPath);
-        return Optional.of(FilterApi.eq(booleanColumn, getBoolean(literal)));
-
-      case INT32:
-        // Handle decimal columns stored as INT32
-        if (parquetField.logicalType instanceof DecimalLogicalTypeAnnotation
-            && isDecimal(literal)) {
-          IntColumn intColumn = intColumn(columnPath);
-          int intValue =
-              (Integer)
-                  convertDecimalForParquet(
-                      getDecimal(literal),
-                      parquetType,
-                      (DecimalLogicalTypeAnnotation) parquetField.logicalType);
-          return Optional.of(FilterApi.eq(intColumn, intValue));
-        } else {
-          // Handle regular integer columns
-          IntColumn intColumn = intColumn(columnPath);
-          return Optional.of(FilterApi.eq(intColumn, getInt(literal)));
-        }
-
-      case INT64:
-        // Handle decimal columns stored as INT64
-        if (parquetField.logicalType instanceof DecimalLogicalTypeAnnotation
-            && isDecimal(literal)) {
-          LongColumn longColumn = longColumn(columnPath);
-          long longValue =
-              (Long)
-                  convertDecimalForParquet(
-                      getDecimal(literal),
-                      parquetType,
-                      (DecimalLogicalTypeAnnotation) parquetField.logicalType);
-          return Optional.of(FilterApi.eq(longColumn, longValue));
-        } else {
-          // Handle regular long columns
-          LongColumn longColumn = longColumn(columnPath);
-          return Optional.of(FilterApi.eq(longColumn, getLong(literal)));
-        }
-
-      case FLOAT:
-        FloatColumn floatColumn = floatColumn(columnPath);
-        return Optional.of(FilterApi.eq(floatColumn, getFloat(literal)));
-
-      case DOUBLE:
-        DoubleColumn doubleColumn = doubleColumn(columnPath);
-        return Optional.of(FilterApi.eq(doubleColumn, getDouble(literal)));
-
-      case BINARY:
-        // Handle decimal columns stored as BINARY
-        if (parquetField.logicalType instanceof DecimalLogicalTypeAnnotation
-            && isDecimal(literal)) {
-          BinaryColumn binaryColumn = binaryColumn(columnPath);
-          Binary binaryValue =
-              (Binary)
-                  convertDecimalForParquet(
-                      getDecimal(literal),
-                      parquetType,
-                      (DecimalLogicalTypeAnnotation) parquetField.logicalType);
-          return Optional.of(FilterApi.eq(binaryColumn, binaryValue));
-        } else {
-          // Handle regular binary/string columns
-          BinaryColumn binaryColumn = binaryColumn(columnPath);
-          Binary binary = getBinary(literal);
-          return Optional.of(FilterApi.eq(binaryColumn, binary));
-        }
-
-      case FIXED_LEN_BYTE_ARRAY:
-        // Decimal columns stored as FIXED_LEN_BYTE_ARRAY
-        if (parquetField.logicalType instanceof DecimalLogicalTypeAnnotation
-            && isDecimal(literal)) {
-          BinaryColumn binaryColumn = binaryColumn(columnPath);
-          Binary binaryValue =
-              (Binary)
-                  convertDecimalForParquet(
-                      getDecimal(literal),
-                      parquetType,
-                      (DecimalLogicalTypeAnnotation) parquetField.logicalType);
-          return Optional.of(FilterApi.eq(binaryColumn, binaryValue));
-        }
-        break;
-    }
-
-    return Optional.empty();
   }
 }
