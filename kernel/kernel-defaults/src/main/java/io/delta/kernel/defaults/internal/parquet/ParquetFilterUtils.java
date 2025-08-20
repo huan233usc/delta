@@ -101,6 +101,15 @@ public class ParquetFilterUtils {
     DataType litType = literal.getDataType();
     LogicalTypeAnnotation logicalType = parquetType.getLogicalTypeAnnotation();
     // Debug output
+    System.out.println(
+        "DEBUG: canUseLiteral called - litType="
+            + litType.getClass().getSimpleName()
+            + ", parquetType="
+            + parquetType.getPrimitiveTypeName()
+            + ", logicalType="
+            + (logicalType != null ? logicalType.getClass().getSimpleName() : "null")
+            + ", literal value="
+            + literal.getValue());
     switch (parquetType.getPrimitiveTypeName()) {
       case BOOLEAN:
         return litType instanceof BooleanType;
@@ -572,6 +581,16 @@ public class ParquetFilterUtils {
       DecimalLogicalTypeAnnotation decimalLogicalType) {
 
     BigDecimal decimalValue = getDecimal(literal);
+    // Debug output
+    System.out.println(
+        "DEBUG: convertDecimalComparator called - column="
+            + columnPath
+            + ", decimal="
+            + decimalValue
+            + ", comparator="
+            + comparator
+            + ", parquetType="
+            + parquetType.getPrimitiveTypeName());
 
     switch (parquetType.getPrimitiveTypeName()) {
       case INT32:
@@ -579,8 +598,18 @@ public class ParquetFilterUtils {
           IntColumn intColumn = intColumn(columnPath);
           int intValue =
               (Integer) convertDecimalForParquet(decimalValue, parquetType, decimalLogicalType);
+          System.out.println(
+              "DEBUG: INT32 decimal conversion - input="
+                  + decimalValue
+                  + ", scale="
+                  + decimalLogicalType.getScale()
+                  + ", precision="
+                  + decimalLogicalType.getPrecision()
+                  + ", converted intValue="
+                  + intValue);
           switch (comparator) {
             case "=":
+              System.out.println(FilterApi.eq(intColumn, intValue));
               return Optional.of(FilterApi.eq(intColumn, intValue));
             case "<":
               return Optional.of(FilterApi.lt(intColumn, intValue));
@@ -698,11 +727,30 @@ public class ParquetFilterUtils {
       return Optional.empty();
     }
 
+    // Debug: log number of equality predicates and the combined OR structure
+    try {
+      System.out.println(
+          "DEBUG: IN conversion - column="
+              + ColumnPath.get(column.getNames()).toDotString()
+              + ", numValues="
+              + equalityPredicates.size());
+      for (FilterPredicate p : equalityPredicates) {
+        System.out.println("DEBUG: IN equality predicate: " + p);
+      }
+    } catch (Throwable t) {
+      // ignore debug failures
+    }
 
     // Combine all equality predicates with OR
     FilterPredicate result = equalityPredicates.get(0);
     for (int i = 1; i < equalityPredicates.size(); i++) {
       result = FilterApi.or(result, equalityPredicates.get(i));
+    }
+
+    try {
+      System.out.println("DEBUG: IN combined predicate: " + result);
+    } catch (Throwable t) {
+      // ignore debug failures
     }
 
     return Optional.of(result);
