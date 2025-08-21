@@ -185,6 +185,19 @@ public class ScanImpl implements Scan {
               scanMetrics,
               paginationContextOpt);
 
+      List<FilteredColumnarBatch> dataList = new ArrayList<>();
+      try {
+        while (scanFileIter.hasNext()) {
+          dataList.add(scanFileIter.next());
+        }
+        cachedScanFileData = dataList;
+      } finally {
+        // Skip close for POC testing to avoid IOException
+        // result.close();
+      }
+
+      scanFileIter = createIteratorFromCachedData();
+
       // Apply partition pruning
       scanFileIter = applyPartitionPruning(engine, scanFileIter);
 
@@ -195,24 +208,7 @@ public class ScanImpl implements Scan {
       }
 
       // TODO when !includeStats drop the stats column if present before returning
-      CloseableIterator<FilteredColumnarBatch> result =
-          wrapWithMetricsReporting(scanFileIter, reportReporter);
-
-      // Cache the data from iterator
-      List<FilteredColumnarBatch> dataList = new ArrayList<>();
-      try {
-        while (result.hasNext()) {
-          dataList.add(result.next());
-        }
-        cachedScanFileData = dataList;
-        cacheValid = true;
-      } finally {
-        // Skip close for POC testing to avoid IOException
-        // result.close();
-      }
-
-      // Return iterator from cached data
-      return createIteratorFromCachedData();
+      return wrapWithMetricsReporting(scanFileIter, reportReporter);
 
     } catch (Exception e) {
       reportReporter.reportError(e);
@@ -246,10 +242,6 @@ public class ScanImpl implements Scan {
   public void resetFilter(Optional<Predicate> filter) {
     this.filter = filter;
     this.partitionAndDataFilters = splitFilters(filter);
-
-    // Invalidate cache
-    this.cacheValid = false;
-    this.cachedScanFileData = null;
   }
 
   /**
