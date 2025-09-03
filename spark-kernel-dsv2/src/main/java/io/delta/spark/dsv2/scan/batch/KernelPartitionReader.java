@@ -17,6 +17,7 @@ package io.delta.spark.dsv2.scan.batch;
 
 import java.util.Collections;
 import org.apache.spark.sql.connector.read.PartitionReader;
+import org.apache.spark.sql.execution.datasources.FilePartition;
 import org.apache.spark.sql.execution.datasources.PartitionedFile;
 import scala.collection.Iterator;
 
@@ -30,7 +31,7 @@ import scala.collection.Iterator;
 class KernelPartitionReader<T> implements PartitionReader<T> {
 
   private final PreparableReadFunction readFunc;
-  private final KernelSparkInputPartition partition;
+  private final FilePartition partition;
 
   private Iterator<T> currentIterator;
   private T currentValue;
@@ -42,8 +43,7 @@ class KernelPartitionReader<T> implements PartitionReader<T> {
    * @param readFunc Function to read parquet files
    * @param partition The input partition to read
    */
-  public KernelPartitionReader(
-      PreparableReadFunction readFunc, KernelSparkInputPartition partition) {
+  public KernelPartitionReader(PreparableReadFunction readFunc, FilePartition partition) {
     this.readFunc = readFunc;
     this.partition = partition;
     this.currentIterator =
@@ -78,7 +78,7 @@ class KernelPartitionReader<T> implements PartitionReader<T> {
     }
 
     // Get the scan file row
-    PartitionedFile partitionedFile = partition.getPartitionedFile();
+    PartitionedFile partitionedFile = partition.files()[0];
     // Apply the read function
     currentIterator = (Iterator<T>) readFunc.apply(partitionedFile);
     isInitialized = true;

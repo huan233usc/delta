@@ -24,7 +24,6 @@ import io.delta.kernel.defaults.engine.DefaultEngine;
 import io.delta.kernel.engine.Engine;
 import io.delta.kernel.internal.data.ScanStateRow;
 import io.delta.kernel.utils.CloseableIterator;
-import io.delta.spark.dsv2.scan.batch.KernelSparkInputPartition;
 import io.delta.spark.dsv2.scan.batch.PreparableReadFunction;
 import io.delta.spark.dsv2.utils.ScalaUtils;
 import io.delta.spark.dsv2.utils.SchemaUtils;
@@ -39,6 +38,7 @@ import org.apache.spark.sql.catalyst.InternalRow;
 import org.apache.spark.sql.catalyst.util.DateTimeUtils;
 import org.apache.spark.sql.connector.read.InputPartition;
 import org.apache.spark.sql.execution.datasources.FileFormat;
+import org.apache.spark.sql.execution.datasources.FilePartition;
 import org.apache.spark.sql.execution.datasources.PartitionedFile;
 import org.apache.spark.sql.execution.datasources.PartitioningUtils;
 import org.apache.spark.sql.execution.datasources.parquet.ParquetFileFormat;
@@ -67,7 +67,6 @@ public class KernelSparkScanContext {
   private final Engine engine;
   private final Configuration hadoopConf;
   private final Row scanState;
-  private final SerializableKernelRowWrapper serializedScanState;
   private final StructType dataSchema;
   private final StructType tablePartitionSchema;
   private final ParquetFileFormat parquetFileFormat;
@@ -87,7 +86,6 @@ public class KernelSparkScanContext {
     this.engine = DefaultEngine.create(this.hadoopConf);
     this.kernelScan = requireNonNull(kernelScan, "kernelScan is null");
     this.scanState = kernelScan.getScanState(engine);
-    this.serializedScanState = new SerializableKernelRowWrapper(scanState);
     this.dataSchema = requireNonNull(dataSchema, "dataSchema is null");
     this.tablePartitionSchema =
         requireNonNull(tablePartitionSchema, "tablePartitionSchema is null");
@@ -142,7 +140,8 @@ public class KernelSparkScanContext {
         while (rows.hasNext()) {
           Row row = rows.next();
           PartitionedFile partitionedFile = partitionedFileFromKernelRow(row);
-          partitions.add(new KernelSparkInputPartition(serializedScanState, partitionedFile));
+          partitions.add(
+              new FilePartition(partitions.size(), new PartitionedFile[] {partitionedFile}));
         }
       } catch (IOException e) {
         LOG.warn("Failed to construct input partition", e);
@@ -269,11 +268,6 @@ public class KernelSparkScanContext {
         JavaConverters.asScalaBufferConverter(java.util.Arrays.asList(filtersArray))
             .asScala()
             .toSeq();
-
-    System.out.println("Reader function schemas:");
-    System.out.println("  Data schema: " + dataSchema);
-    System.out.println("  Partition schema: " + tablePartitionSchema);
-
     Map<String, String> options = new HashMap<>();
     options.put(FileFormat.OPTION_RETURNING_BATCH(), String.valueOf(supportColumnar()));
     Function1<PartitionedFile, Iterator<InternalRow>> scalaReadFunc =
@@ -286,9 +280,6 @@ public class KernelSparkScanContext {
             filters,
             ScalaUtils.toScalaMap(options),
             hadoopConf);
-
-    // Create a serializable function that delegates to the Scala function
-    // Using lambda instead of anonymous inner class avoids capturing 'this' reference
     return (PartitionedFile file) -> scalaReadFunc.apply(file);
   }
 

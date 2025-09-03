@@ -19,6 +19,7 @@ import org.apache.spark.sql.catalyst.InternalRow;
 import org.apache.spark.sql.connector.read.InputPartition;
 import org.apache.spark.sql.connector.read.PartitionReader;
 import org.apache.spark.sql.connector.read.PartitionReaderFactory;
+import org.apache.spark.sql.execution.datasources.FilePartition;
 import org.apache.spark.sql.vectorized.ColumnarBatch;
 
 /**
@@ -42,7 +43,7 @@ public class KernelPartitionReaderFactory implements PartitionReaderFactory {
 
   @Override
   public PartitionReader<InternalRow> createReader(InputPartition partition) {
-    return new KernelPartitionReader<>(readFunc, (KernelSparkInputPartition) partition);
+    return new KernelPartitionReader<>(readFunc, (FilePartition) partition);
   }
 
   @Override
@@ -52,6 +53,6 @@ public class KernelPartitionReaderFactory implements PartitionReaderFactory {
 
   @Override
   public PartitionReader<ColumnarBatch> createColumnarReader(InputPartition partition) {
-    return new KernelPartitionReader<>(readFunc, (KernelSparkInputPartition) partition);
+    return new KernelPartitionReader<>(readFunc, (FilePartition) partition);
   }
 }
