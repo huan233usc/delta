@@ -19,6 +19,7 @@ import io.delta.spark.dsv2.utils.SerializableKernelRowWrapper;
 import java.io.Serializable;
 import java.util.Objects;
 import org.apache.spark.sql.connector.read.InputPartition;
+import org.apache.spark.sql.execution.datasources.PartitionedFile;
 
 /**
  * Spark InputPartition implementation that holds serialized Delta Kernel scan information.
@@ -34,21 +35,19 @@ public final class KernelSparkInputPartition implements InputPartition, Serializ
   // TODO: [delta-io/delta#5109] implement the logic to group files into partition based on file
   //       size.
   /** Serialized representation of one scan file row from kernel scan */
-  private final SerializableKernelRowWrapper serializedScanFileRow;
+  private final PartitionedFile partitionedFile;
 
   public KernelSparkInputPartition(
-      SerializableKernelRowWrapper serializedScanState,
-      SerializableKernelRowWrapper serializedScanFileRow) {
+      SerializableKernelRowWrapper serializedScanState, PartitionedFile partitionedFile) {
     this.serializedScanState = Objects.requireNonNull(serializedScanState, "serializedScanState");
-    this.serializedScanFileRow =
-        Objects.requireNonNull(serializedScanFileRow, "serializedScanFileRow");
+    this.partitionedFile = Objects.requireNonNull(partitionedFile, "partitionedFile");
   }
 
   public SerializableKernelRowWrapper getSerializedScanState() {
     return serializedScanState;
   }
 
-  public SerializableKernelRowWrapper getSerializedScanFileRow() {
-    return serializedScanFileRow;
+  public PartitionedFile getPartitionedFile() {
+    return partitionedFile;
   }
 }

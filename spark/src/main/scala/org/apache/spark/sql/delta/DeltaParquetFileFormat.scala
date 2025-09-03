@@ -166,6 +166,11 @@ case class DeltaParquetFileFormat(
       filters: Seq[Filter],
       options: Map[String, String],
       hadoopConf: Configuration): PartitionedFile => Iterator[InternalRow] = {
+    // scalastyle:off println
+    println("Reader function schemas:");
+    println("  Data schema: " + dataSchema);
+    println("  Partition schema: " + partitionSchema);
+    println("  Required schema: " + requiredSchema);
 
     val useMetadataRowIndexConf = DeltaSQLConf.DELETION_VECTORS_USE_METADATA_ROW_INDEX
     val useMetadataRowIndex = sparkSession.sessionState.conf.getConf(useMetadataRowIndexConf)

@@ -23,6 +23,7 @@ import io.delta.spark.dsv2.KernelSparkDsv2TestBase;
 import io.delta.spark.dsv2.scan.KernelSparkScanContext;
 import java.io.File;
 import org.apache.spark.sql.connector.read.InputPartition;
+import org.apache.spark.sql.types.StructType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -47,7 +48,8 @@ public class KernelSparkBatchScanTest extends KernelSparkDsv2TestBase {
     createTestTableWithData(path, tableName);
     Scan scan = TableManager.loadSnapshot(path).build(defaultEngine).getScanBuilder().build();
     KernelSparkScanContext scanContext =
-        new KernelSparkScanContext(scan, spark.sessionState().newHadoopConf());
+        new KernelSparkScanContext(
+            scan, new StructType(), new StructType(), spark.sessionState().newHadoopConf());
     KernelSparkBatchScan batchScan = new KernelSparkBatchScan(scanContext);
 
     InputPartition[] partitions = batchScan.planInputPartitions();
@@ -67,7 +69,8 @@ public class KernelSparkBatchScanTest extends KernelSparkDsv2TestBase {
 
     Scan scan = TableManager.loadSnapshot(path).build(defaultEngine).getScanBuilder().build();
     KernelSparkScanContext scanContext =
-        new KernelSparkScanContext(scan, spark.sessionState().newHadoopConf());
+        new KernelSparkScanContext(
+            scan, new StructType(), new StructType(), spark.sessionState().newHadoopConf());
     KernelSparkBatchScan batchScan = new KernelSparkBatchScan(scanContext);
 
     InputPartition[] result1 = batchScan.planInputPartitions();
@@ -80,7 +83,7 @@ public class KernelSparkBatchScanTest extends KernelSparkDsv2TestBase {
       KernelSparkInputPartition p1 = (KernelSparkInputPartition) result1[i];
       KernelSparkInputPartition p2 = (KernelSparkInputPartition) result2[i];
       assertEquals(p1.getSerializedScanState(), p2.getSerializedScanState());
-      assertEquals(p1.getSerializedScanFileRow(), p2.getSerializedScanFileRow());
+      assertEquals(p1.getPartitionedFile(), p2.getPartitionedFile());
     }
   }
 
@@ -91,7 +94,8 @@ public class KernelSparkBatchScanTest extends KernelSparkDsv2TestBase {
     createTestTableWithData(path, tableName);
     Scan scan = TableManager.loadSnapshot(path).build(defaultEngine).getScanBuilder().build();
     KernelSparkScanContext scanContext =
-        new KernelSparkScanContext(scan, spark.sessionState().newHadoopConf());
+        new KernelSparkScanContext(
+            scan, new StructType(), new StructType(), spark.sessionState().newHadoopConf());
     KernelSparkBatchScan batchScan = new KernelSparkBatchScan(scanContext);
 
     UnsupportedOperationException exception =
