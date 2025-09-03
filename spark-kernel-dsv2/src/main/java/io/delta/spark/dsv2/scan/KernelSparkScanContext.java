@@ -70,6 +70,7 @@ public class KernelSparkScanContext {
   private final SerializableKernelRowWrapper serializedScanState;
   private final StructType dataSchema;
   private final StructType tablePartitionSchema;
+  private final ParquetFileFormat parquetFileFormat;
 
   /**
    * Cached scan file batches from kernel scan to avoid re-reading log files for replay on multiple
@@ -91,6 +92,7 @@ public class KernelSparkScanContext {
     this.tablePartitionSchema =
         requireNonNull(tablePartitionSchema, "tablePartitionSchema is null");
     this.cachedScanFileBatches = new AtomicReference<>(Optional.empty());
+    this.parquetFileFormat = new ParquetFileFormat();
   }
 
   /**
@@ -268,22 +270,19 @@ public class KernelSparkScanContext {
             .asScala()
             .toSeq();
 
-    ParquetFileFormat format = new ParquetFileFormat();
-
     System.out.println("Reader function schemas:");
     System.out.println("  Data schema: " + dataSchema);
     System.out.println("  Partition schema: " + tablePartitionSchema);
 
     Map<String, String> options = new HashMap<>();
     options.put(FileFormat.OPTION_RETURNING_BATCH(), String.valueOf(supportColumnar()));
-    System.out.println("  Options: " + options);
     Function1<PartitionedFile, Iterator<InternalRow>> scalaReadFunc =
-        format.buildReaderWithPartitionValues(
+        parquetFileFormat.buildReaderWithPartitionValues(
             sparkSession,
             SchemaUtils.convertKernelSchemaToSparkSchema(
                 ScanStateRow.getLogicalSchema(scanState)), // Data columns only
             tablePartitionSchema, // Partition columns only
-            dataSchema, // Data + partition columns (partition at end)
+            dataSchema,
             filters,
             ScalaUtils.toScalaMap(options),
             hadoopConf);
@@ -294,9 +293,8 @@ public class KernelSparkScanContext {
   }
 
   public boolean supportColumnar() {
-    return new ParquetFileFormat()
-        .supportBatch(
-            SparkSession.active(),
-            SchemaUtils.convertKernelSchemaToSparkSchema(ScanStateRow.getLogicalSchema(scanState)));
+    return parquetFileFormat.supportBatch(
+        SparkSession.active(),
+        SchemaUtils.convertKernelSchemaToSparkSchema(ScanStateRow.getLogicalSchema(scanState)));
   }
 }
