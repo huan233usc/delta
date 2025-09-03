@@ -35,75 +35,103 @@ public class KernelSparkScanBuilder
     implements org.apache.spark.sql.connector.read.ScanBuilder, SupportsPushDownRequiredColumns {
 
   private final ScanBuilder kernelScanBuilder;
+  private final Configuration hadoopConf;
+  private final SchemaPartitioner schemaPartitioner;
+
   private StructType dataSchema;
   private StructType partitionSchema;
   private StructType readSchema;
-  private final Configuration hadoopConf;
-  private final Set<String> partitionColumnSet;
 
   public KernelSparkScanBuilder(SnapshotImpl snapshot, Configuration hadoopConf) {
     requireNonNull(snapshot, "snapshot is null");
     this.kernelScanBuilder = snapshot.getScanBuilder();
     this.hadoopConf = hadoopConf;
 
-    // Get full table schema
-    StructType fullSchema = SchemaUtils.convertKernelSchemaToSparkSchema(snapshot.getSchema());
-
-    // Get partition column names from snapshot
+    // Get partition column names from snapshot and create a partitioner
     List<String> partitionColumnNames = snapshot.getPartitionColumnNames();
-    partitionColumnSet = new HashSet<>(partitionColumnNames);
+    Set<String> partitionColumnSet = new HashSet<>(partitionColumnNames);
+    this.schemaPartitioner = new SchemaPartitioner(partitionColumnSet);
 
-    // Separate partition fields from data fields - similar to Scala version
-    List<StructField> partitionFields = new ArrayList<>();
-    List<StructField> dataFields = new ArrayList<>();
-
-    for (StructField field : fullSchema.fields()) {
-      if (partitionColumnSet.contains(field.name())) {
-        partitionFields.add(field);
-      } else {
-        dataFields.add(field);
-      }
-    }
-
-    // Create schemas
-    this.dataSchema = new StructType(dataFields.toArray(new StructField[0]));
-    this.partitionSchema = new StructType(partitionFields.toArray(new StructField[0]));
-
-    // Read schema = dataSchema.fields ++ partitionSchema.fields
-    List<StructField> readFields = new ArrayList<>();
-    readFields.addAll(Arrays.asList(dataSchema.fields()));
-    readFields.addAll(Arrays.asList(partitionSchema.fields()));
-    this.readSchema = new StructType(readFields.toArray(new StructField[0]));
+    // Get full table schema and partition it
+    StructType fullSchema = SchemaUtils.convertKernelSchemaToSparkSchema(snapshot.getSchema());
+    SchemaPartitionResult result = schemaPartitioner.partition(fullSchema);
+    this.dataSchema = result.getDataSchema();
+    this.partitionSchema = result.getPartitionSchema();
+    this.readSchema = result.getReadSchema();
   }
 
   @Override
   public void pruneColumns(StructType requiredSchema) {
-    // Separate partition fields from data fields - similar to Scala version
-    List<StructField> partitionFields = new ArrayList<>();
-    List<StructField> dataFields = new ArrayList<>();
-
-    for (StructField field : requiredSchema.fields()) {
-      if (partitionColumnSet.contains(field.name())) {
-        partitionFields.add(field);
-      } else {
-        dataFields.add(field);
-      }
-    }
-
-    // Create schemas
-    this.dataSchema = new StructType(dataFields.toArray(new StructField[0]));
-    this.partitionSchema = new StructType(partitionFields.toArray(new StructField[0]));
-
-    // Read schema = dataSchema.fields ++ partitionSchema.fields
-    List<StructField> readFields = new ArrayList<>();
-    readFields.addAll(Arrays.asList(dataSchema.fields()));
-    readFields.addAll(Arrays.asList(partitionSchema.fields()));
-    this.readSchema = new StructType(readFields.toArray(new StructField[0]));
+    SchemaPartitionResult result = schemaPartitioner.partition(requiredSchema);
+    this.dataSchema = result.getDataSchema();
+    this.partitionSchema = result.getPartitionSchema();
+    this.readSchema = result.getReadSchema();
   }
 
   @Override
   public Scan build() {
     return new KernelSparkScan(
         kernelScanBuilder.build(), readSchema, dataSchema, partitionSchema, hadoopConf);
+  }
+
+  /** Holds the result of partitioning a {@link StructType} into data and partition schemas. */
+  private static class SchemaPartitionResult {
+    private final StructType dataSchema;
+    private final StructType partitionSchema;
+    private final StructType readSchema;
+
+    SchemaPartitionResult(StructType dataSchema, StructType partitionSchema) {
+      this.dataSchema = dataSchema;
+      this.partitionSchema = partitionSchema;
+
+      // Read schema = dataSchema.fields ++ partitionSchema.fields
+      List<StructField> readFields = new ArrayList<>();
+      readFields.addAll(Arrays.asList(dataSchema.fields()));
+      readFields.addAll(Arrays.asList(partitionSchema.fields()));
+      this.readSchema = new StructType(readFields.toArray(new StructField[0]));
+    }
+
+    StructType getDataSchema() {
+      return dataSchema;
+    }
+
+    StructType getPartitionSchema() {
+      return partitionSchema;
+    }
+
+    StructType getReadSchema() {
+      return readSchema;
+    }
+  }
+
+  /**
+   * Helper class to partition a {@link StructType} into data and partition schemas based on a set
+   * of partition column names.
+   */
+  private static class SchemaPartitioner {
+    private final Set<String> partitionColumns;
+
+    SchemaPartitioner(Set<String> partitionColumns) {
+      this.partitionColumns = partitionColumns;
+    }
+
+    SchemaPartitionResult partition(StructType schema) {
+      List<StructField> partitionFields = new ArrayList<>();
+      List<StructField> dataFields = new ArrayList<>();
+
+      Arrays.stream(schema.fields())
+          .forEach(
+              field -> {
+                if (partitionColumns.contains(field.name())) {
+                  partitionFields.add(field);
+                } else {
+                  dataFields.add(field);
+                }
+              });
+
+      return new SchemaPartitionResult(
+          new StructType(dataFields.toArray(new StructField[0])),
+          new StructType(partitionFields.toArray(new StructField[0])));
+    }
   }
 }
