@@ -19,7 +19,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.delta.kernel.TableManager;
 import io.delta.spark.dsv2.KernelSparkDsv2TestBase;
+import io.delta.spark.dsv2.utils.SparkSchemaWrapper;
 import java.io.File;
+import java.util.HashSet;
 import org.apache.spark.sql.types.DataTypes;
 import org.apache.spark.sql.types.StructField;
 import org.apache.spark.sql.types.StructType;
@@ -45,7 +47,7 @@ public class KernelSparkScanTest extends KernelSparkDsv2TestBase {
     KernelSparkScan scan =
         new KernelSparkScan(
             TableManager.loadSnapshot(path).build(defaultEngine).getScanBuilder().build(),
-            expectedSparkSchema,
+            SparkSchemaWrapper.build(expectedSparkSchema, new HashSet<>()),
             spark.sessionState().newHadoopConf());
 
     assertEquals(expectedSparkSchema, scan.readSchema());

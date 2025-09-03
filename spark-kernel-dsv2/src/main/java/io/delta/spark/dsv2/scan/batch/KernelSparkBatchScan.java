@@ -38,6 +38,8 @@ public class KernelSparkBatchScan implements Batch {
 
   @Override
   public PartitionReaderFactory createReaderFactory() {
-    throw new UnsupportedOperationException("reader factory is not implemented");
+    // Create and return the factory
+    return new KernelPartitionReaderFactory(
+        sharedContext.createReaderFunction(), sharedContext.supportColumnar());
   }
 }

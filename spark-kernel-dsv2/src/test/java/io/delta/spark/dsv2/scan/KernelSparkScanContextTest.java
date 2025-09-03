@@ -23,6 +23,7 @@ import io.delta.spark.dsv2.KernelSparkDsv2TestBase;
 import io.delta.spark.dsv2.scan.batch.KernelSparkInputPartition;
 import java.io.File;
 import org.apache.spark.sql.connector.read.InputPartition;
+import org.apache.spark.sql.types.StructType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -33,7 +34,8 @@ public class KernelSparkScanContextTest extends KernelSparkDsv2TestBase {
     assertThrows(
         NullPointerException.class,
         () -> {
-          new KernelSparkScanContext(null, spark.sessionState().newHadoopConf());
+          new KernelSparkScanContext(
+              null, new StructType(), new StructType(), spark.sessionState().newHadoopConf());
         });
   }
 
@@ -48,7 +50,7 @@ public class KernelSparkScanContextTest extends KernelSparkDsv2TestBase {
     assertThrows(
         NullPointerException.class,
         () -> {
-          new KernelSparkScanContext(scan, null);
+          new KernelSparkScanContext(scan, new StructType(), new StructType(), null);
         });
   }
 
@@ -60,7 +62,8 @@ public class KernelSparkScanContextTest extends KernelSparkDsv2TestBase {
 
     Scan scan = TableManager.loadSnapshot(path).build(defaultEngine).getScanBuilder().build();
     KernelSparkScanContext scanContext =
-        new KernelSparkScanContext(scan, spark.sessionState().newHadoopConf());
+        new KernelSparkScanContext(
+            scan, new StructType(), new StructType(), spark.sessionState().newHadoopConf());
 
     InputPartition[] partitions = scanContext.planPartitions();
 
@@ -71,7 +74,7 @@ public class KernelSparkScanContextTest extends KernelSparkDsv2TestBase {
       assertTrue(partition instanceof KernelSparkInputPartition);
       KernelSparkInputPartition kernelPartition = (KernelSparkInputPartition) partition;
       assertNotNull(kernelPartition.getSerializedScanState());
-      assertNotNull(kernelPartition.getSerializedScanFileRow());
+      assertNotNull(kernelPartition.getPartitionedFile());
     }
   }
 
@@ -83,7 +86,8 @@ public class KernelSparkScanContextTest extends KernelSparkDsv2TestBase {
 
     Scan scan = TableManager.loadSnapshot(path).build(defaultEngine).getScanBuilder().build();
     KernelSparkScanContext scanContext =
-        new KernelSparkScanContext(scan, spark.sessionState().newHadoopConf());
+        new KernelSparkScanContext(
+            scan, new StructType(), new StructType(), spark.sessionState().newHadoopConf());
 
     InputPartition[] partitions = scanContext.planPartitions();
 
@@ -99,7 +103,8 @@ public class KernelSparkScanContextTest extends KernelSparkDsv2TestBase {
 
     Scan scan = TableManager.loadSnapshot(path).build(defaultEngine).getScanBuilder().build();
     KernelSparkScanContext scanContext =
-        new KernelSparkScanContext(scan, spark.sessionState().newHadoopConf());
+        new KernelSparkScanContext(
+            scan, new StructType(), new StructType(), spark.sessionState().newHadoopConf());
 
     InputPartition[] partitions1 = scanContext.planPartitions();
     InputPartition[] partitions2 = scanContext.planPartitions();
@@ -112,9 +117,7 @@ public class KernelSparkScanContextTest extends KernelSparkDsv2TestBase {
       KernelSparkInputPartition p1 = (KernelSparkInputPartition) partitions1[i];
       KernelSparkInputPartition p2 = (KernelSparkInputPartition) partitions2[i];
       assertEquals(p1.getSerializedScanState(), p2.getSerializedScanState());
-      assertEquals(p1.getSerializedScanFileRow(), p2.getSerializedScanFileRow());
+      assertEquals(p1.getPartitionedFile(), p2.getPartitionedFile());
     }
   }
-
-  // Test helper methods have been moved to KernelSparkDsv2TestBase
 }

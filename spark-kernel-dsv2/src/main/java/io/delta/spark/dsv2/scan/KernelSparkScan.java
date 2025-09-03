@@ -19,6 +19,7 @@ import static java.util.Objects.requireNonNull;
 
 import io.delta.kernel.Scan;
 import io.delta.spark.dsv2.scan.batch.KernelSparkBatchScan;
+import io.delta.spark.dsv2.utils.SparkSchemaWrapper;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.spark.sql.connector.read.Batch;
 import org.apache.spark.sql.types.StructType;
@@ -31,18 +32,22 @@ import org.apache.spark.sql.types.StructType;
 public class KernelSparkScan implements org.apache.spark.sql.connector.read.Scan {
 
   private final KernelSparkScanContext kernelSparkScanContext;
-  private final StructType sparkReadSchema;
+  private final SparkSchemaWrapper schemaWrapper;
 
-  public KernelSparkScan(Scan kernelScan, StructType sparkReadSchema, Configuration hadoopConf) {
-    this.sparkReadSchema = requireNonNull(sparkReadSchema, "sparkReadSchema is null");
+  public KernelSparkScan(
+      Scan kernelScan, SparkSchemaWrapper schemaWrapper, Configuration hadoopConf) {
+    this.schemaWrapper = requireNonNull(schemaWrapper, "sparkReadSchema is null");
     this.kernelSparkScanContext =
         new KernelSparkScanContext(
-            requireNonNull(kernelScan, "kernelScan is null"), requireNonNull(hadoopConf));
+            requireNonNull(kernelScan, "kernelScan is null"),
+            schemaWrapper.getDataSchema(),
+            schemaWrapper.getPartitionSchema(),
+            requireNonNull(hadoopConf));
   }
 
   @Override
   public StructType readSchema() {
-    return sparkReadSchema;
+    return schemaWrapper.getReadSchema();
   }
 
   @Override
