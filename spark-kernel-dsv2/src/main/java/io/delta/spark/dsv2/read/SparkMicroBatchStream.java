@@ -51,7 +51,7 @@ public class SparkMicroBatchStream
         implements MicroBatchStream, SupportsAdmissionControl, SupportsTriggerAvailableNow {
 
     private static final Logger LOG = LoggerFactory.getLogger(KernelDeltaMicroBatchStream.class);
-    
+
     private final StructType readDataSchema;
     private final StructType dataSchema;
     private final StructType partitionSchema;;
