@@ -23,23 +23,31 @@ import io.delta.kernel.engine.Engine;
 import io.delta.kernel.exceptions.TableNotFoundException;
 import io.delta.kernel.internal.DeltaLogActionUtils;
 import io.delta.kernel.internal.SnapshotImpl;
+import io.delta.kernel.internal.actions.AddFile;
+import io.delta.kernel.internal.util.Tuple2;
 import io.delta.kernel.internal.util.VectorUtils;
 import io.delta.kernel.utils.CloseableIterator;
-import io.delta.spark.dsv2.scan.KernelSparkScanContext;
-import io.delta.spark.dsv2.scan.batch.KernelPartitionReaderFactory;
-import io.delta.spark.dsv2.utils.ScalaUtils;
-import io.delta.spark.dsv2.utils.SparkSchemaWrapper;
 import java.util.*;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.spark.sql.SparkSession;
+import org.apache.spark.sql.catalyst.InternalRow;
 import org.apache.spark.sql.connector.read.InputPartition;
 import org.apache.spark.sql.connector.read.PartitionReaderFactory;
 import org.apache.spark.sql.connector.read.streaming.*;
 import org.apache.spark.sql.delta.sources.CompositeLimit;
 import org.apache.spark.sql.delta.sources.DeltaSourceOffset;
 import org.apache.spark.sql.delta.sources.ReadMaxBytes;
+import org.apache.spark.sql.execution.datasources.FileFormat$;
+import org.apache.spark.sql.execution.datasources.PartitionedFile;
+import org.apache.spark.sql.execution.datasources.parquet.ParquetFileFormat;
+import org.apache.spark.sql.execution.datasources.parquet.ParquetUtils;
+import org.apache.spark.sql.internal.SQLConf;
+import org.apache.spark.sql.sources.Filter;
 import org.apache.spark.sql.types.StructType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import scala.Function1;
+import scala.collection.JavaConverters;
 
 /**
  * Delta Kernel implementation of Spark's MicroBatchStream using Kernel API.
@@ -50,64 +58,49 @@ import org.slf4j.LoggerFactory;
 public class SparkMicroBatchStream
         implements MicroBatchStream, SupportsAdmissionControl, SupportsTriggerAvailableNow {
 
-    private static final Logger LOG = LoggerFactory.getLogger(KernelDeltaMicroBatchStream.class);
-
+    private static final Logger LOG = LoggerFactory.getLogger(SparkMicroBatchStream.class);
+    private final SQLConf sqlConf = SQLConf.get();
     private final StructType readDataSchema;
     private final StructType dataSchema;
     private final StructType partitionSchema;;
     private final Configuration hadoopConf;
-    private final KernelStreamingOptions options;
     private final String tableId;
-    private final KernelTableHelper tableHelper;
+    private final StreamingHelper tableHelper;
     private final SnapshotImpl snapshotAtSourceInit;
+    private final Filter[] dataFilters;
 
-    // Configuration class for streaming options
-    public static class KernelStreamingOptions {
-        public boolean ignoreDeletes = false;
-        public boolean ignoreChanges = false;
-        public Optional<Long> startingVersion = Optional.empty();
-        public Optional<String> startingTimestamp = Optional.empty();
-        public int maxFilesPerTrigger = 1000;
-        public long maxBytesPerTrigger = 1024 * 1024 * 1024; // 1GB
-    }
 
-    public KernelDeltaMicroBatchStream(
-            String tablePath,
+    public SparkMicroBatchStream(
+            StructType readDataSchema,
+            StructType dataSchema,
+            StructType partitionSchema,
             Engine engine,
             SnapshotImpl snapshotAtSourceInit,
-            SparkSchemaWrapper schemaWrapper,
-            Configuration hadoopConf,
-            KernelStreamingOptions options) {
-        this.engine = requireNonNull(engine, "engine is null");
-        this.schemaWrapper = requireNonNull(schemaWrapper, "schemaWrapper is null");
+            Filter[] dataFilters,
+            Configuration hadoopConf) {
         this.hadoopConf = requireNonNull(hadoopConf, "hadoopConf is null");
-        this.options = requireNonNull(options, "options is null");
         this.tableId = snapshotAtSourceInit.getMetadata().getId();
 
         // Create table helper for snapshot management and incremental scanning
         this.tableHelper =
-                new KernelTableHelper(
-                        requireNonNull(tablePath, "tablePath is null"),
+                new StreamingHelper(
+                        snapshotAtSourceInit.getPath(),
                         engine,
                         requireNonNull(snapshotAtSourceInit, "snapshotAtSourceInit is null"));
         this.snapshotAtSourceInit = snapshotAtSourceInit;
-
-        LOG.info(
-                "Created KernelDeltaMicroBatchStream for table: {} at version: {}",
-                tablePath,
-                snapshotAtSourceInit.getVersion());
+        this.readDataSchema = readDataSchema;
+        this.partitionSchema = partitionSchema;
+        this.dataSchema = dataSchema;
+        this.dataFilters = dataFilters;
     }
 
     @Override
     public Offset initialOffset() {
         LOG.info("Getting initial offset for Delta streaming");
-
         // Use the starting version if specified, otherwise use the current snapshot version
-        long version = options.startingVersion.orElse(tableHelper.getCurrentSnapshot().getVersion());
-        boolean isInitialSnapshot = !options.startingVersion.isPresent();
-
+        long version = tableHelper.getCurrentSnapshot().getVersion();
         return DeltaSourceOffset.apply(
-                tableId, version, DeltaSourceOffset.BASE_INDEX(), isInitialSnapshot);
+                tableId, version, DeltaSourceOffset.BASE_INDEX(), true);
     }
 
     /**
@@ -147,11 +140,6 @@ public class SparkMicroBatchStream
             LOG.error("Failed to get latest offset", e);
             throw new RuntimeException("Failed to get latest offset", e);
         }
-    }
-
-    @Override
-    public ReadLimit getDefaultReadLimit() {
-        return ReadLimit.maxFiles(options.maxFilesPerTrigger);
     }
 
     @Override
@@ -224,17 +212,27 @@ public class SparkMicroBatchStream
     public PartitionReaderFactory createReaderFactory() {
         LOG.info("Creating reader factory for Delta streaming");
 
-        // Create a scan context for the reader factory using current snapshot
-        KernelSparkScanContext scanContext =
-                new KernelSparkScanContext(
-                        tableHelper.getCurrentSnapshot().getScanBuilder().build(),
-                        schemaWrapper.getDataSchema(),
-                        schemaWrapper.getPartitionSchema(),
-                        hadoopConf);
+        boolean enableVectorizedReader =
+                ParquetUtils.isBatchReadSupportedForSchema(sqlConf, readDataSchema);
 
-        // Create the factory similar to how KernelSparkBatchScan does it
-        return new KernelPartitionReaderFactory(
-                scanContext.createReaderFunction(), scanContext.supportColumnar());
+        scala.collection.immutable.Map<String, String> options =
+                scala.collection.immutable.Map$.MODULE$
+                        .<String, String>empty()
+                        .updated(
+                                FileFormat$.MODULE$.OPTION_RETURNING_BATCH(),
+                                String.valueOf(enableVectorizedReader));
+        Function1<PartitionedFile, scala.collection.Iterator<InternalRow>> readFunc =
+                new ParquetFileFormat()
+                        .buildReaderWithPartitionValues(
+                                SparkSession.active(),
+                                dataSchema,
+                                partitionSchema,
+                                readDataSchema,
+                                JavaConverters.asScalaBuffer(Arrays.asList(dataFilters)).toSeq(),
+                                options,
+                                hadoopConf);
+
+        return new SparkReaderFactory(readFunc, enableVectorizedReader);
     }
 
     @Override
@@ -277,13 +275,12 @@ public class SparkMicroBatchStream
 
     // SupportsAdmissionControl implementation
     private Optional<DeltaSourceOffset> getStartingOffset(AdmissionLimits limits) {
-        long startVersion = options.startingVersion.orElse(snapshotAtSourceInit.getVersion());
-        boolean isInitialSnapshot = !options.startingVersion.isPresent();
+        long startVersion = snapshotAtSourceInit.getVersion();
+        boolean isInitialSnapshot = true;
 
         if (startVersion < 0) {
             return Optional.empty();
         }
-
         return computeEndOffsetFromVersion(startVersion, isInitialSnapshot, limits);
     }
 
@@ -418,16 +415,16 @@ public class SparkMicroBatchStream
                 org.apache.spark.sql.catalyst.InternalRow.empty();
 
         // Convert partition values if we have partition schema
-        if (schemaWrapper.getPartitionSchema() != null
-                && schemaWrapper.getPartitionSchema().fields().length > 0
+        if (partitionSchema != null
+                && partitionSchema.fields().length > 0
                 && partitionValueMap != null
                 && !partitionValueMap.isEmpty()) {
 
             // Create partition values array
-            Object[] partitionArray = new Object[schemaWrapper.getPartitionSchema().fields().length];
+            Object[] partitionArray = new Object[partitionSchema.fields().length];
 
-            for (int i = 0; i < schemaWrapper.getPartitionSchema().fields().length; i++) {
-                String fieldName = schemaWrapper.getPartitionSchema().fields()[i].name();
+            for (int i = 0; i < partitionSchema.fields().length; i++) {
+                String fieldName = partitionSchema.fields()[i].name();
                 String value = partitionValueMap.get(fieldName);
 
                 if (value != null) {
@@ -491,7 +488,7 @@ public class SparkMicroBatchStream
             long endVersion,
             boolean isInitialSnapshot,
             AdmissionLimits limits) {
-
+        // TODO: initial snapshot should return all the add files.
         LOG.info(
                 "Getting file changes from version {} (index {}) with limits {}",
                 fromVersion,
@@ -501,9 +498,6 @@ public class SparkMicroBatchStream
         try {
             Set<DeltaLogActionUtils.DeltaAction> actionSet = new HashSet<>();
             actionSet.add(DeltaLogActionUtils.DeltaAction.ADD);
-            actionSet.add(DeltaLogActionUtils.DeltaAction.REMOVE);
-            actionSet.add(DeltaLogActionUtils.DeltaAction.CDC);
-            actionSet.add(DeltaLogActionUtils.DeltaAction.COMMITINFO);
 
             CloseableIterator<ColumnarBatch> changes =
                     tableHelper.getIncrementalChanges(fromVersion, Optional.of(endVersion), actionSet);
@@ -538,24 +532,18 @@ public class SparkMicroBatchStream
         public final long version;
         public final long index;
         public final io.delta.kernel.internal.actions.AddFile add;
-        public final io.delta.kernel.internal.actions.RemoveFile remove;
-        public final io.delta.kernel.internal.actions.AddCDCFile cdc;
 
         public IndexedFile(
                 long version,
                 long index,
-                io.delta.kernel.internal.actions.AddFile add,
-                io.delta.kernel.internal.actions.RemoveFile remove,
-                io.delta.kernel.internal.actions.AddCDCFile cdc) {
+                io.delta.kernel.internal.actions.AddFile add) {
             this.version = version;
             this.index = index;
             this.add = add;
-            this.remove = remove;
-            this.cdc = cdc;
         }
 
         public boolean hasFileAction() {
-            return add != null || remove != null || cdc != null;
+            return add != null;
         }
     }
 
@@ -564,7 +552,6 @@ public class SparkMicroBatchStream
         private final CloseableIterator<ColumnarBatch> batches;
         private final long startVersion;
         private final long startIndex;
-        private final boolean isInitialSnapshot;
         private final AdmissionLimits limits;
 
         private java.util.Iterator<IndexedFile> currentBatchIterator;
@@ -580,7 +567,6 @@ public class SparkMicroBatchStream
             this.batches = batches;
             this.startVersion = startVersion;
             this.startIndex = startIndex;
-            this.isInitialSnapshot = isInitialSnapshot;
             this.limits = limits;
         }
 
@@ -639,45 +625,24 @@ public class SparkMicroBatchStream
 
                 while (rows.hasNext()) {
                     io.delta.kernel.data.Row row = rows.next();
-
-                    // Extract action information from the row
-                    // The exact implementation depends on the action schema
-                    io.delta.kernel.internal.actions.AddFile addFile = null;
-                    io.delta.kernel.internal.actions.RemoveFile removeFile = null;
-                    io.delta.kernel.internal.actions.AddCDCFile cdcFile = null;
-
+                    Tuple2<Long, io.delta.kernel.internal.actions.AddFile> addFile = null;
                     try {
-                        // Try to parse as different action types
-                        // This is a simplified approach - in reality you'd need to check the action type first
-
-                        // Check if this row contains an ADD action
                         if (row.isNullAt(0) == false) {
-                            // Attempt to parse as AddFile (simplified)
                             addFile = parseAddFile(row);
+                            if(addFile._1 > currentVersion) {
+                                currentVersion = addFile._1;
+                                currentIndex = 0;
+                            }
                         }
-
-                        // Check if this row contains a REMOVE action
-                        if (addFile == null && row.isNullAt(1) == false) {
-                            // Attempt to parse as RemoveFile (simplified)
-                            removeFile = parseRemoveFile(row);
-                        }
-
-                        // Check if this row contains a CDC action
-                        if (addFile == null && removeFile == null && row.isNullAt(2) == false) {
-                            // Attempt to parse as CDCFile (simplified)
-                            cdcFile = parseCDCFile(row);
-                        }
-
-                        if (addFile != null || removeFile != null || cdcFile != null) {
+                        if (addFile != null) {
                             IndexedFile indexedFile =
-                                    new IndexedFile(currentVersion, currentIndex, addFile, removeFile, cdcFile);
+                                    new IndexedFile(addFile._1, currentIndex, addFile._2);
                             files.add(indexedFile);
                             currentIndex++;
                         }
 
                     } catch (Exception e) {
                         LOG.debug("Failed to parse row as file action, skipping: {}", e.getMessage());
-                        // Skip this row and continue
                     }
                 }
 
@@ -689,39 +654,20 @@ public class SparkMicroBatchStream
         }
 
         // Simplified parsers for different action types
-        private io.delta.kernel.internal.actions.AddFile parseAddFile(io.delta.kernel.data.Row row) {
+        private Tuple2<Long, io.delta.kernel.internal.actions.AddFile> parseAddFile(io.delta.kernel.data.Row row) {
             // This is a highly simplified implementation
             // In reality, you'd need to properly parse the AddFile schema
             try {
                 if (row.isNullAt(0)) return null;
-
-                // For now, create a mock AddFile to demonstrate the structure
-                // You would need to properly extract fields from the row based on the schema
-                LOG.debug("Parsing ADD file action (simplified implementation)");
-
                 // Return null for now to avoid complex schema parsing
                 // This should be implemented based on AddFile.FULL_SCHEMA
-                return null;
+                return new Tuple2<>(row.getLong(0), new AddFile(row.getStruct(2)));
 
             } catch (Exception e) {
                 LOG.debug("Failed to parse ADD file: {}", e.getMessage());
                 return null;
             }
         }
-
-        private io.delta.kernel.internal.actions.RemoveFile parseRemoveFile(
-                io.delta.kernel.data.Row row) {
-            // Similar simplified implementation for RemoveFile
-            LOG.debug("Parsing REMOVE file action (simplified implementation)");
-            return null;
-        }
-
-        private io.delta.kernel.internal.actions.AddCDCFile parseCDCFile(io.delta.kernel.data.Row row) {
-            // Similar simplified implementation for CDCFile
-            LOG.debug("Parsing CDC file action (simplified implementation)");
-            return null;
-        }
-
         @Override
         public void close() {
             try {
