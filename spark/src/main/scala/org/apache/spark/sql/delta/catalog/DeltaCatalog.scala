@@ -60,6 +60,7 @@ import org.apache.spark.sql.execution.datasources.{DataSource, PartitioningUtils
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.sources.InsertableRelation
 import org.apache.spark.sql.types.{IntegerType, StructField, StructType}
+import io.delta.spark.dsv2.utils.CCv2Utils
 
 
 /**
@@ -230,11 +231,12 @@ class DeltaCatalog extends DelegatingCatalogExtension
     try {
       super.loadTable(ident) match {
         case v1: V1Table if DeltaTableUtils.isDeltaTable(v1.catalogTable) =>
-          DeltaTableV2(
-            spark,
-            new Path(v1.catalogTable.location),
-            catalogTable = Some(v1.catalogTable),
-            tableIdentifier = Some(ident.toString))
+          CCv2Utils.convertToV2Connector(
+            DeltaTableV2(
+              spark,
+              new Path(v1.catalogTable.location),
+              catalogTable = Some(v1.catalogTable),
+              tableIdentifier = Some(ident.toString)))
         case o => o
       }
     } catch {

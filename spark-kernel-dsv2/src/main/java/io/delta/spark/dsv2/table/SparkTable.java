@@ -23,8 +23,6 @@ import io.delta.kernel.internal.SnapshotImpl;
 import io.delta.spark.dsv2.read.SparkScanBuilder;
 import io.delta.spark.dsv2.utils.SchemaUtils;
 import java.util.*;
-import java.util.function.Supplier;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.spark.sql.connector.catalog.*;
 import org.apache.spark.sql.connector.expressions.Expressions;
@@ -58,12 +56,13 @@ public class SparkTable implements Table, SupportsRead {
     this.identifier = requireNonNull(identifier, "identifier is null");
     this.tablePath = requireNonNull(tablePath, "snapshot is null");
     this.hadoopConf = requireNonNull(hadoopConf, "hadoop conf is null");
-    this.snapshot = (SnapshotImpl) TableManager.loadSnapshot(tablePath).build(DefaultEngine.create(hadoopConf));
+    this.snapshot =
+        (SnapshotImpl) TableManager.loadSnapshot(tablePath).build(DefaultEngine.create(hadoopConf));
     this.v1Fallback = Optional.empty();
 
     this.schema = SchemaUtils.convertKernelSchemaToSparkSchema(snapshot.getSchema());
     this.partColNames =
-            Collections.unmodifiableList(new ArrayList<>(snapshot.getPartitionColumnNames()));
+        Collections.unmodifiableList(new ArrayList<>(snapshot.getPartitionColumnNames()));
 
     final Set<String> partitionColumnSet = new HashSet<>(partColNames);
     final List<StructField> dataFields = new ArrayList<>();
@@ -77,7 +76,7 @@ public class SparkTable implements Table, SupportsRead {
     this.partitionSchema = new StructType(partitionFields.toArray(new StructField[0]));
     this.columns = CatalogV2Util.structTypeToV2Columns(schema);
     this.partitionTransforms =
-            partColNames.stream().map(Expressions::identity).toArray(Transform[]::new);
+        partColNames.stream().map(Expressions::identity).toArray(Transform[]::new);
   }
 
   public Optional<Table> v1Fallback() {
@@ -90,7 +89,11 @@ public class SparkTable implements Table, SupportsRead {
    * @param identifier the table identifier
    * @param hadoopConf the Hadoop configuration to use for creating the engine
    */
-  public SparkTable(Identifier identifier, SnapshotImpl snapshot, Configuration hadoopConf, Optional<Table> v1Fallback) {
+  public SparkTable(
+      Identifier identifier,
+      SnapshotImpl snapshot,
+      Configuration hadoopConf,
+      Optional<Table> v1Fallback) {
     this.identifier = requireNonNull(identifier, "identifier is null");
     this.tablePath = requireNonNull(snapshot.getPath(), "snapshot is null");
     this.hadoopConf = requireNonNull(hadoopConf, "hadoop conf is null");

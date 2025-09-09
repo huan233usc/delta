@@ -48,5 +48,3 @@ class DeltaSparkSessionExtension extends io.delta.sql.DeltaSparkSessionExtension
     super.apply(extensions)
   }
 }
-
-
