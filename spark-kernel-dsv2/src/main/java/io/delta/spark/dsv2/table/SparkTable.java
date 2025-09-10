@@ -51,7 +51,6 @@ public class SparkTable implements Table, SupportsRead {
   private final StructType partitionSchema;
   private final Column[] columns;
   private final Transform[] partitionTransforms;
-  private final Optional<Table> v1Fallback;
 
   public SparkTable(Identifier identifier, String tablePath, Configuration hadoopConf) {
     this.identifier = requireNonNull(identifier, "identifier is null");
@@ -59,7 +58,6 @@ public class SparkTable implements Table, SupportsRead {
     this.hadoopConf = requireNonNull(hadoopConf, "hadoop conf is null");
     this.snapshot =
         (SnapshotImpl) TableManager.loadSnapshot(tablePath).build(DefaultEngine.create(hadoopConf));
-    this.v1Fallback = Optional.empty();
 
     this.schema = SchemaUtils.convertKernelSchemaToSparkSchema(snapshot.getSchema());
     this.partColNames =
@@ -80,9 +78,6 @@ public class SparkTable implements Table, SupportsRead {
         partColNames.stream().map(Expressions::identity).toArray(Transform[]::new);
   }
 
-  public Optional<Table> v1Fallback() {
-    return v1Fallback;
-  }
 
   /**
    * Creates a new DeltaKernelTable instance.
@@ -93,13 +88,11 @@ public class SparkTable implements Table, SupportsRead {
   public SparkTable(
       Identifier identifier,
       SnapshotImpl snapshot,
-      Configuration hadoopConf,
-      Optional<Table> v1Fallback) {
+      Configuration hadoopConf) {
     this.identifier = requireNonNull(identifier, "identifier is null");
     this.tablePath = requireNonNull(snapshot.getPath(), "snapshot is null");
     this.hadoopConf = requireNonNull(hadoopConf, "hadoop conf is null");
     this.snapshot = snapshot;
-    this.v1Fallback = v1Fallback;
 
     this.schema = SchemaUtils.convertKernelSchemaToSparkSchema(snapshot.getSchema());
     this.partColNames =

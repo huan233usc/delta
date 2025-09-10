@@ -16,10 +16,8 @@
 
 package io.delta.spark.dsv2
 
-import io.delta.spark.dsv2.table.SparkTable
-
+import io.delta.spark.dsv2.table.{SparkTable, SparkTableWithV1ConnectorFallback}
 import org.apache.spark.sql.delta.catalog.DeltaTableV2
-
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.plans.logical.{InsertIntoStatement, LogicalPlan}
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -55,15 +53,15 @@ class MaybeApplyV1Connector(session: SparkSession)
 
   object Batch {
     def unapply(dsv2: DataSourceV2Relation): Option[DataSourceV2Relation] = dsv2.table match {
-      case d: SparkTable if d.v1Fallback().isPresent =>
-        Some(dsv2.copy(table = d.v1Fallback().get()))
+      case d: SparkTableWithV1ConnectorFallback =>
+        Some(dsv2.copy(table = d.getFallback))
       case _ => None
     }
   }
   object Streaming {
     def unapply(dsv2: StreamingRelationV2): Option[StreamingRelationV2] = dsv2.table match {
-      case d: SparkTable if d.v1Fallback().isPresent =>
-        Some(dsv2.copy(table = d.v1Fallback().get()))
+      case d: SparkTableWithV1ConnectorFallback =>
+        Some(dsv2.copy(table = d.getFallback))
       case _ => None
     }
 

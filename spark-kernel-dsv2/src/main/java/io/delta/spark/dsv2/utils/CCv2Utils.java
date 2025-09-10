@@ -3,6 +3,7 @@ package io.delta.spark.dsv2.utils;
 import io.delta.kernel.defaults.engine.DefaultEngine;
 import io.delta.kernel.internal.SnapshotImpl;
 import io.delta.spark.dsv2.table.SparkTable;
+import io.delta.spark.dsv2.table.SparkTableWithV1ConnectorFallback;
 import io.delta.storage.commit.uccommitcoordinator.UCClient;
 import io.delta.storage.commit.uccommitcoordinator.UCCommitCoordinatorClient;
 import io.delta.storage.commit.uccommitcoordinator.UCTokenBasedRestClient;
@@ -80,7 +81,7 @@ public class CCv2Utils {
       Identifier ident = toIdentifier(table.getTableIdentifierIfExists());
 
       // Return Kernel-backed Spark V2 table with a V1 fallback
-      return new SparkTable(ident, snapshot, baseHadoopConf, Optional.of(table));
+      return new SparkTableWithV1ConnectorFallback(ident, snapshot, baseHadoopConf, table);
     } catch (Exception e) {
       // In case of any failure, gracefully fall back to the original table
       System.err.println("convertToV2Connector failed: " + e.getMessage());

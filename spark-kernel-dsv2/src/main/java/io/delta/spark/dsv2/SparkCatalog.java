@@ -14,7 +14,6 @@ public class SparkCatalog extends DeltaCatalog {
   public Table loadTable(Identifier identifier) {
     Table deltaTable = super.loadTable(identifier);
     if (deltaTable instanceof DeltaTableV2) {
-      System.out.println("load table fallback");
       return CCv2Utils.convertToV2Connector((DeltaTableV2) deltaTable);
     }
     return deltaTable;
