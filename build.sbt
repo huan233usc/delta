@@ -56,7 +56,7 @@ val LATEST_RELEASED_SPARK_VERSION = "3.5.3"
 val SPARK_MASTER_VERSION = "4.0.1-SNAPSHOT"
 val sparkVersion = settingKey[String]("Spark version")
 spark / sparkVersion := getSparkVersion()
-//sparkKernelDsv2 / sparkVersion := getSparkVersion()
+sparkKernelDsv2 / sparkVersion := getSparkVersion()
 connectCommon / sparkVersion := getSparkVersion()
 connectClient / sparkVersion := getSparkVersion()
 connectServer / sparkVersion := getSparkVersion()
@@ -244,10 +244,10 @@ def crossSparkSettings(): Seq[Setting[_]] = getSparkVersion() match {
 }
 
 def runTaskOnlyOnSparkMaster[T](
-    task: sbt.TaskKey[T],
-    taskName: String,
-    projectName: String,
-    emptyValue: => T): Def.Initialize[Task[T]] = {
+                                 task: sbt.TaskKey[T],
+                                 taskName: String,
+                                 projectName: String,
+                                 emptyValue: => T): Def.Initialize[Task[T]] = {
   if (getSparkVersion() == SPARK_MASTER_VERSION) {
     Def.task(task.value)
   } else {
@@ -434,9 +434,6 @@ lazy val deltaSuiteGenerator = (project in file("spark/delta-suite-generator"))
   )
 
 lazy val spark = (project in file("spark"))
-  .dependsOn(kernelApi)
-  .dependsOn(kernelDefaults)
-  .dependsOn(unity)
   .dependsOn(storage)
   .enablePlugins(Antlr4Plugin)
   .disablePlugins(JavaFormatterPlugin, ScalafmtPlugin)
@@ -468,7 +465,7 @@ lazy val spark = (project in file("spark"))
       "org.mockito" % "mockito-inline" % "4.11.0" % "test",
     ),
     Compile / packageBin / mappings := (Compile / packageBin / mappings).value ++
-        listPythonFiles(baseDirectory.value.getParentFile / "python"),
+      listPythonFiles(baseDirectory.value.getParentFile / "python"),
     Antlr4 / antlr4PackageName := Some("io.delta.sql.parser"),
     Antlr4 / antlr4GenListener := true,
     Antlr4 / antlr4GenVisitor := true,
@@ -515,33 +512,6 @@ lazy val spark = (project in file("spark"))
       Seq(file)
     },
     TestParallelization.settings,
-    // Include sources and resources from the former spark-kernel-dsv2 module
-    Compile / unmanagedSourceDirectories ++= Seq(
-      baseDirectory.value.getParentFile / "spark-kernel-dsv2" / "src" / "main" / "java",
-      baseDirectory.value.getParentFile / "spark-kernel-dsv2" / "src" / "main" / "scala"
-    ).filter(_.exists()),
-    Compile / unmanagedResourceDirectories ++= Seq(
-      baseDirectory.value.getParentFile / "spark-kernel-dsv2" / "src" / "main" / "resources"
-    ).filter(_.exists()),
-    Test / unmanagedSourceDirectories ++= Seq(
-      baseDirectory.value.getParentFile / "spark-kernel-dsv2" / "src" / "test" / "java",
-      baseDirectory.value.getParentFile / "spark-kernel-dsv2" / "src" / "test" / "scala"
-    ).filter(_.exists()),
-    Test / unmanagedResourceDirectories ++= Seq(
-      baseDirectory.value.getParentFile / "spark-kernel-dsv2" / "src" / "test" / "resources"
-    ).filter(_.exists()),
-    // Exclude example/test-only classes that require optional external modules
-    Compile / unmanagedSources := (Compile / unmanagedSources).value.filterNot { f =>
-      val p = f.getPath
-      p.endsWith("/io/delta/spark/dsv2/FakeCatalog.java")
-    },
-    // JUnit 5 dependencies for migrated spark-kernel-dsv2 tests
-    libraryDependencies ++= Seq(
-      "org.junit.jupiter" % "junit-jupiter-api" % "5.8.2" % "test",
-      "org.junit.jupiter" % "junit-jupiter-engine" % "5.8.2" % "test",
-      "org.junit.jupiter" % "junit-jupiter-params" % "5.8.2" % "test",
-      "net.aichler" % "jupiter-interface" % "0.11.1" % "test"
-    )
   )
   .configureUnidoc(
     generatedJavaDoc = getSparkVersion() == LATEST_RELEASED_SPARK_VERSION,
@@ -713,7 +683,8 @@ lazy val kernelDefaults = (project in file("kernel/kernel-defaults"))
   .dependsOn(kernelApi % "test->test")
   .dependsOn(storage)
   .dependsOn(storage % "test->test") // Required for InMemoryCommitCoordinator for tests
-  // no dependency back to spark to avoid cycles
+  .dependsOn(spark % "test->test")
+  .dependsOn(goldenTables % "test")
   .settings(
     name := "delta-kernel-defaults",
     commonSettings,
@@ -748,35 +719,35 @@ lazy val kernelDefaults = (project in file("kernel/kernel-defaults"))
     ),
     MultiShardMultiJVMTestParallelization.settings,
     javaCheckstyleSettings("dev/kernel-checkstyle.xml"),
-      // Unidoc settings
+    // Unidoc settings
     unidocSourceFilePatterns += SourceFilePattern("io/delta/kernel/"),
   ).configureUnidoc(docTitle = "Delta Kernel Defaults")
 
 
-//lazy val sparkKernelDsv2 = (project in file("spark-kernel-dsv2"))
-//  .dependsOn(kernelApi)
-//  .dependsOn(kernelDefaults)
-//  .dependsOn(spark % "test->test")
-//  .dependsOn(goldenTables % "test")
-//  .settings(
-//    name := "delta-spark-dsv2",
-//    commonSettings,
-//    javafmtCheckSettings,
-//    skipReleaseSettings,
-//    Test / javaOptions ++= Seq("-ea"),
-//    libraryDependencies ++= Seq(
-//      "org.apache.spark" %% "spark-sql" % sparkVersion.value % "provided",
-//      "org.apache.spark" %% "spark-core" % sparkVersion.value % "provided",
-//      "org.apache.spark" %% "spark-catalyst" % sparkVersion.value % "provided",
-//
-//      "org.junit.jupiter" % "junit-jupiter-api" % "5.8.2" % "test",
-//      "org.junit.jupiter" % "junit-jupiter-engine" % "5.8.2" % "test",
-//      "org.junit.jupiter" % "junit-jupiter-params" % "5.8.2" % "test",
-//      "net.aichler" % "jupiter-interface" % "0.11.1" % "test"
-//    ),
-//    Test / testOptions += Tests.Argument(TestFrameworks.JUnit, "-v", "-a")
-//  )
-  // TODO to enable unit doc for sparkKernelDsv2.
+lazy val sparkKernelDsv2 = (project in file("spark-kernel-dsv2"))
+  .dependsOn(kernelApi)
+  .dependsOn(kernelDefaults)
+  .dependsOn(unity)
+  .dependsOn(spark)
+  .dependsOn(goldenTables % "test")
+  .settings(
+    name := "delta-spark-dsv2",
+    commonSettings,
+    javafmtCheckSettings,
+    Test / javaOptions ++= Seq("-ea"),
+    libraryDependencies ++= Seq(
+      "org.apache.spark" %% "spark-sql" % sparkVersion.value % "provided",
+      "org.apache.spark" %% "spark-core" % sparkVersion.value % "provided",
+      "org.apache.spark" %% "spark-catalyst" % sparkVersion.value % "provided",
+
+      "org.junit.jupiter" % "junit-jupiter-api" % "5.8.2" % "test",
+      "org.junit.jupiter" % "junit-jupiter-engine" % "5.8.2" % "test",
+      "org.junit.jupiter" % "junit-jupiter-params" % "5.8.2" % "test",
+      "net.aichler" % "jupiter-interface" % "0.11.1" % "test"
+    ),
+    Test / testOptions += Tests.Argument(TestFrameworks.JUnit, "-v", "-a"),
+  )
+// TODO to enable unit doc for sparkKernelDsv2.
 
 lazy val unity = (project in file("unity"))
   .enablePlugins(ScalafmtPlugin)
@@ -847,8 +818,8 @@ lazy val storageS3DynamoDB = (project in file("storage-s3-dynamodb"))
   ).configureUnidoc()
 
 val icebergSparkRuntimeArtifactName = {
- val (expMaj, expMin, _) = getMajorMinorPatch(defaultSparkVersion)
- s"iceberg-spark-runtime-$expMaj.$expMin"
+  val (expMaj, expMin, _) = getMajorMinorPatch(defaultSparkVersion)
+  s"iceberg-spark-runtime-$expMaj.$expMin"
 }
 
 lazy val testDeltaIcebergJar = (project in file("testDeltaIcebergJar"))
@@ -1687,7 +1658,7 @@ val createTargetClassesDir = taskKey[Unit]("create target classes dir")
 
 // Don't use these groups for any other projects
 lazy val sparkGroup = project
-  .aggregate(spark, contribs, storage, storageS3DynamoDB, sharing, hudi)
+  .aggregate(spark, sparkKernelDsv2, contribs, storage, storageS3DynamoDB, sharing, hudi)
   .settings(
     // crossScalaVersions must be set to Nil on the aggregating project
     crossScalaVersions := Nil,
@@ -1713,7 +1684,7 @@ lazy val kernelGroup = project
     publish / skip := false,
     unidocSourceFilePatterns := {
       (kernelApi / unidocSourceFilePatterns).value.scopeToProject(kernelApi) ++
-      (kernelDefaults / unidocSourceFilePatterns).value.scopeToProject(kernelDefaults)
+        (kernelDefaults / unidocSourceFilePatterns).value.scopeToProject(kernelDefaults)
     }
   ).configureUnidoc(docTitle = "Delta Kernel")
 
