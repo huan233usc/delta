@@ -17,7 +17,6 @@ package io.delta.spark.dsv2.read;
 
 import static java.util.Objects.requireNonNull;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.delta.kernel.data.ColumnarBatch;
 import io.delta.kernel.engine.Engine;
 import io.delta.kernel.exceptions.TableNotFoundException;
@@ -37,6 +36,7 @@ import org.apache.spark.sql.connector.read.streaming.*;
 import org.apache.spark.sql.delta.sources.CompositeLimit;
 import org.apache.spark.sql.delta.sources.DeltaSourceOffset;
 import org.apache.spark.sql.delta.sources.ReadMaxBytes;
+import org.apache.spark.sql.delta.util.JsonUtils;
 import org.apache.spark.sql.execution.datasources.FileFormat$;
 import org.apache.spark.sql.execution.datasources.PartitionedFile;
 import org.apache.spark.sql.execution.datasources.parquet.ParquetFileFormat;
@@ -98,7 +98,7 @@ public class SparkMicroBatchStream
     LOG.info("Getting initial offset for Delta streaming");
     // Use the starting version if specified, otherwise use the current snapshot version
     long version = tableHelper.getCurrentSnapshot().getVersion();
-    return DeltaSourceOffset.apply(tableId, version, DeltaSourceOffset.BASE_INDEX(), true);
+    return DeltaSourceOffset.apply(tableId, 0, DeltaSourceOffset.BASE_INDEX(), true);
   }
 
   /**
@@ -119,7 +119,6 @@ public class SparkMicroBatchStream
   public Offset latestOffset(Offset startOffset, ReadLimit limit) {
     LOG.info(
         "Getting latest offset with admission control from {} with limit {}", startOffset, limit);
-
     try {
       DeltaSourceOffset start = null;
       if (startOffset != null) {
@@ -131,6 +130,7 @@ public class SparkMicroBatchStream
           start == null
               ? getStartingOffset(limits)
               : getNextOffsetFromPreviousOffset(start, limits);
+      System.out.println(endOffset);
 
       return endOffset.orElse(null);
 
@@ -167,7 +167,11 @@ public class SparkMicroBatchStream
       while (fileChanges.hasNext()) {
         IndexedFile indexedFile = fileChanges.next();
         // Only include ADD files for actual data reading
-        if (indexedFile.add != null && indexedFile.add.getDataChange()) {
+        if ((indexedFile.version > startOffset.reservoirVersion()
+                || (indexedFile.version == startOffset.reservoirVersion()
+                    && indexedFile.index > startOffset.index()))
+            && indexedFile.add != null
+            && indexedFile.add.getDataChange()) {
           addFiles.add(indexedFile);
         }
       }
@@ -250,9 +254,8 @@ public class SparkMicroBatchStream
     LOG.debug("Deserializing offset from JSON: {}", json);
     try {
       // Use Jackson to deserialize the JSON directly
-      ObjectMapper mapper = io.delta.kernel.internal.util.JsonUtils.mapper();
 
-      DeltaSourceOffset offset = mapper.readValue(json, DeltaSourceOffset.class);
+      DeltaSourceOffset offset = JsonUtils.mapper().readValue(json, DeltaSourceOffset.class);
 
       // Validate that the table ID matches
       if (!tableId.equals(offset.reservoirId())) {
@@ -399,7 +402,8 @@ public class SparkMicroBatchStream
 
     // Create file path
     org.apache.spark.paths.SparkPath filePath =
-        org.apache.spark.paths.SparkPath.fromPathString(addFile.getPath());
+        org.apache.spark.paths.SparkPath.fromPathString(
+            snapshotAtSourceInit.getPath() + "/" + addFile.getPath());
 
     long length = addFile.getSize();
     long modificationTime = addFile.getModificationTime();
@@ -622,7 +626,7 @@ public class SparkMicroBatchStream
           io.delta.kernel.data.Row row = rows.next();
           Tuple2<Long, io.delta.kernel.internal.actions.AddFile> addFile = null;
           try {
-            if (row.isNullAt(0) == false) {
+            if (!row.isNullAt(2)) {
               addFile = parseAddFile(row);
               if (addFile._1 > currentVersion) {
                 currentVersion = addFile._1;
@@ -650,18 +654,7 @@ public class SparkMicroBatchStream
     // Simplified parsers for different action types
     private Tuple2<Long, io.delta.kernel.internal.actions.AddFile> parseAddFile(
         io.delta.kernel.data.Row row) {
-      // This is a highly simplified implementation
-      // In reality, you'd need to properly parse the AddFile schema
-      try {
-        if (row.isNullAt(0)) return null;
-        // Return null for now to avoid complex schema parsing
-        // This should be implemented based on AddFile.FULL_SCHEMA
-        return new Tuple2<>(row.getLong(0), new AddFile(row.getStruct(2)));
-
-      } catch (Exception e) {
-        LOG.debug("Failed to parse ADD file: {}", e.getMessage());
-        return null;
-      }
+      return new Tuple2<>(row.getLong(0), new AddFile(row.getStruct(2)));
     }
 
     @Override

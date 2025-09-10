@@ -118,8 +118,8 @@ public class SparkScan implements Scan, SupportsReportStatistics {
   public MicroBatchStream toMicroBatchStream(String checkpointLocation) {
     return new SparkMicroBatchStream(
         dataSchema,
-        partitionSchema,
         readDataSchema,
+        partitionSchema,
         DefaultEngine.create(hadoopConf),
         snapshot,
         dataFilters,
