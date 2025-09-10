@@ -120,20 +120,10 @@ public class SparkMicroBatchStream
     LOG.info(
         "Getting latest offset with admission control from {} with limit {}", startOffset, limit);
     try {
-      DeltaSourceOffset start = null;
-      if (startOffset != null) {
-        start = DeltaSourceOffset.apply(tableId, startOffset);
-      }
-
+      DeltaSourceOffset start = DeltaSourceOffset.apply(tableId, startOffset);
       AdmissionLimits limits = AdmissionLimits.from(limit);
-      Optional<DeltaSourceOffset> endOffset =
-          start == null
-              ? getStartingOffset(limits)
-              : getNextOffsetFromPreviousOffset(start, limits);
-      System.out.println(endOffset);
-
-      return endOffset.orElse(null);
-
+      Optional<DeltaSourceOffset> endOffset = getNextOffsetFromPreviousOffset(start, limits);
+      return endOffset.orElse(start);
     } catch (Exception e) {
       LOG.error("Failed to get latest offset", e);
       throw new RuntimeException("Failed to get latest offset", e);
@@ -166,7 +156,6 @@ public class SparkMicroBatchStream
 
       while (fileChanges.hasNext()) {
         IndexedFile indexedFile = fileChanges.next();
-        // Only include ADD files for actual data reading
         if ((indexedFile.version > startOffset.reservoirVersion()
                 || (indexedFile.version == startOffset.reservoirVersion()
                     && indexedFile.index > startOffset.index()))
