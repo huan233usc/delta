@@ -230,11 +230,11 @@ class DeltaCatalog extends DelegatingCatalogExtension
     try {
       super.loadTable(ident) match {
         case v1: V1Table if DeltaTableUtils.isDeltaTable(v1.catalogTable) =>
-          DeltaTableV2(
-            spark,
-            new Path(v1.catalogTable.location),
-            catalogTable = Some(v1.catalogTable),
-            tableIdentifier = Some(ident.toString))
+            DeltaTableV2(
+              spark,
+              new Path(v1.catalogTable.location),
+              catalogTable = Some(v1.catalogTable),
+              tableIdentifier = Some(ident.toString))
         case o => o
       }
     } catch {

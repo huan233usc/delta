@@ -45,6 +45,7 @@ public class SparkScanBuilder implements ScanBuilder, SupportsPushDownRequiredCo
   private final Set<String> partitionColumnSet;
   private StructType requiredDataSchema;
   private Predicate[] pushedPredicates;
+  private SnapshotImpl snapshot;
 
   public SparkScanBuilder(
       String tableName,
@@ -65,6 +66,7 @@ public class SparkScanBuilder implements ScanBuilder, SupportsPushDownRequiredCo
             .map(f -> f.name().toLowerCase(Locale.ROOT))
             .collect(Collectors.toSet());
     this.pushedPredicates = new Predicate[0];
+    this.snapshot = snapshot;
   }
 
   @Override
@@ -87,6 +89,7 @@ public class SparkScanBuilder implements ScanBuilder, SupportsPushDownRequiredCo
         requiredDataSchema,
         pushedPredicates,
         new Filter[0],
+        snapshot,
         kernelScanBuilder.build(),
         hadoopConf);
   }

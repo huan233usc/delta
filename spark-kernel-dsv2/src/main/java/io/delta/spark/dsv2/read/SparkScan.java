@@ -20,6 +20,7 @@ import io.delta.kernel.data.Row;
 import io.delta.kernel.defaults.engine.DefaultEngine;
 import io.delta.kernel.engine.Engine;
 import io.delta.kernel.expressions.Predicate;
+import io.delta.kernel.internal.SnapshotImpl;
 import io.delta.kernel.internal.actions.AddFile;
 import io.delta.kernel.utils.CloseableIterator;
 import java.io.IOException;
@@ -30,6 +31,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.spark.paths.SparkPath;
 import org.apache.spark.sql.catalyst.InternalRow;
 import org.apache.spark.sql.connector.read.*;
+import org.apache.spark.sql.connector.read.streaming.MicroBatchStream;
 import org.apache.spark.sql.execution.datasources.*;
 import org.apache.spark.sql.internal.SQLConf;
 import org.apache.spark.sql.sources.Filter;
@@ -50,6 +52,7 @@ public class SparkScan implements Scan, SupportsReportStatistics {
   private final Configuration hadoopConf;
   private final SQLConf sqlConf;
   private final ZoneId zoneId;
+  private final SnapshotImpl snapshot;
 
   // Planned input files and stats
   private final List<PartitionedFile> partitionedFiles = new ArrayList<>();
@@ -63,6 +66,7 @@ public class SparkScan implements Scan, SupportsReportStatistics {
       StructType readDataSchema,
       Predicate[] pushedToKernelFilters,
       Filter[] dataFilters,
+      SnapshotImpl snapshot,
       io.delta.kernel.Scan kernelScan,
       Configuration hadoopConf) {
 
@@ -79,6 +83,7 @@ public class SparkScan implements Scan, SupportsReportStatistics {
     this.hadoopConf = Objects.requireNonNull(hadoopConf, "hadoopConf");
     this.sqlConf = SQLConf.get();
     this.zoneId = ZoneId.of(sqlConf.sessionLocalTimeZone());
+    this.snapshot = snapshot;
   }
 
   /**
@@ -106,6 +111,18 @@ public class SparkScan implements Scan, SupportsReportStatistics {
         pushedToKernelFilters,
         dataFilters,
         totalBytes,
+        hadoopConf);
+  }
+
+  @Override
+  public MicroBatchStream toMicroBatchStream(String checkpointLocation) {
+    return new SparkMicroBatchStream(
+        dataSchema,
+        readDataSchema,
+        partitionSchema,
+        DefaultEngine.create(hadoopConf),
+        snapshot,
+        dataFilters,
         hadoopConf);
   }
 

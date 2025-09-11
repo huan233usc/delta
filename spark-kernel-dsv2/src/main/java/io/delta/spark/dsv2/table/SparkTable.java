@@ -17,6 +17,8 @@ package io.delta.spark.dsv2.table;
 
 import static java.util.Objects.requireNonNull;
 
+import io.delta.kernel.TableManager;
+import io.delta.kernel.defaults.engine.DefaultEngine;
 import io.delta.kernel.internal.SnapshotImpl;
 import io.delta.spark.dsv2.read.SparkScanBuilder;
 import io.delta.spark.dsv2.utils.SchemaUtils;
@@ -34,7 +36,8 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap;
 public class SparkTable implements Table, SupportsRead {
 
   private static final Set<TableCapability> CAPABILITIES =
-      Collections.unmodifiableSet(EnumSet.of(TableCapability.BATCH_READ));
+      Collections.unmodifiableSet(
+          EnumSet.of(TableCapability.BATCH_READ, TableCapability.MICRO_BATCH_READ));
 
   private final Identifier identifier;
   private final String tablePath;
@@ -49,21 +52,43 @@ public class SparkTable implements Table, SupportsRead {
   private final Column[] columns;
   private final Transform[] partitionTransforms;
 
-  /**
-   * Creates a new DeltaKernelTable instance.
-   *
-   * @param identifier the table identifier
-   * @param tablePath the table path of the Delta table
-   * @param hadoopConf the Hadoop configuration to use for creating the engine
-   */
   public SparkTable(Identifier identifier, String tablePath, Configuration hadoopConf) {
     this.identifier = requireNonNull(identifier, "identifier is null");
     this.tablePath = requireNonNull(tablePath, "snapshot is null");
     this.hadoopConf = requireNonNull(hadoopConf, "hadoop conf is null");
     this.snapshot =
-        (SnapshotImpl)
-            io.delta.kernel.TableManager.loadSnapshot(tablePath)
-                .build(io.delta.kernel.defaults.engine.DefaultEngine.create(hadoopConf));
+        (SnapshotImpl) TableManager.loadSnapshot(tablePath).build(DefaultEngine.create(hadoopConf));
+
+    this.schema = SchemaUtils.convertKernelSchemaToSparkSchema(snapshot.getSchema());
+    this.partColNames =
+        Collections.unmodifiableList(new ArrayList<>(snapshot.getPartitionColumnNames()));
+
+    final Set<String> partitionColumnSet = new HashSet<>(partColNames);
+    final List<StructField> dataFields = new ArrayList<>();
+    final List<StructField> partitionFields = new ArrayList<>();
+
+    for (StructField field : schema.fields()) {
+      (partitionColumnSet.contains(field.name()) ? partitionFields : dataFields).add(field);
+    }
+
+    this.dataSchema = new StructType(dataFields.toArray(new StructField[0]));
+    this.partitionSchema = new StructType(partitionFields.toArray(new StructField[0]));
+    this.columns = CatalogV2Util.structTypeToV2Columns(schema);
+    this.partitionTransforms =
+        partColNames.stream().map(Expressions::identity).toArray(Transform[]::new);
+  }
+
+  /**
+   * Creates a new DeltaKernelTable instance.
+   *
+   * @param identifier the table identifier
+   * @param hadoopConf the Hadoop configuration to use for creating the engine
+   */
+  public SparkTable(Identifier identifier, SnapshotImpl snapshot, Configuration hadoopConf) {
+    this.identifier = requireNonNull(identifier, "identifier is null");
+    this.tablePath = requireNonNull(snapshot.getPath(), "snapshot is null");
+    this.hadoopConf = requireNonNull(hadoopConf, "hadoop conf is null");
+    this.snapshot = snapshot;
 
     this.schema = SchemaUtils.convertKernelSchemaToSparkSchema(snapshot.getSchema());
     this.partColNames =

@@ -244,10 +244,10 @@ def crossSparkSettings(): Seq[Setting[_]] = getSparkVersion() match {
 }
 
 def runTaskOnlyOnSparkMaster[T](
-    task: sbt.TaskKey[T],
-    taskName: String,
-    projectName: String,
-    emptyValue: => T): Def.Initialize[Task[T]] = {
+                                 task: sbt.TaskKey[T],
+                                 taskName: String,
+                                 projectName: String,
+                                 emptyValue: => T): Def.Initialize[Task[T]] = {
   if (getSparkVersion() == SPARK_MASTER_VERSION) {
     Def.task(task.value)
   } else {
@@ -465,7 +465,7 @@ lazy val spark = (project in file("spark"))
       "org.mockito" % "mockito-inline" % "4.11.0" % "test",
     ),
     Compile / packageBin / mappings := (Compile / packageBin / mappings).value ++
-        listPythonFiles(baseDirectory.value.getParentFile / "python"),
+      listPythonFiles(baseDirectory.value.getParentFile / "python"),
     Antlr4 / antlr4PackageName := Some("io.delta.sql.parser"),
     Antlr4 / antlr4GenListener := true,
     Antlr4 / antlr4GenVisitor := true,
@@ -719,7 +719,7 @@ lazy val kernelDefaults = (project in file("kernel/kernel-defaults"))
     ),
     MultiShardMultiJVMTestParallelization.settings,
     javaCheckstyleSettings("dev/kernel-checkstyle.xml"),
-      // Unidoc settings
+    // Unidoc settings
     unidocSourceFilePatterns += SourceFilePattern("io/delta/kernel/"),
   ).configureUnidoc(docTitle = "Delta Kernel Defaults")
 
@@ -727,13 +727,13 @@ lazy val kernelDefaults = (project in file("kernel/kernel-defaults"))
 lazy val sparkKernelDsv2 = (project in file("spark-kernel-dsv2"))
   .dependsOn(kernelApi)
   .dependsOn(kernelDefaults)
-  .dependsOn(spark % "test->test")
+  .dependsOn(unity)
+  .dependsOn(spark)
   .dependsOn(goldenTables % "test")
   .settings(
     name := "delta-spark-dsv2",
     commonSettings,
     javafmtCheckSettings,
-    skipReleaseSettings,
     Test / javaOptions ++= Seq("-ea"),
     libraryDependencies ++= Seq(
       "org.apache.spark" %% "spark-sql" % sparkVersion.value % "provided",
@@ -745,9 +745,30 @@ lazy val sparkKernelDsv2 = (project in file("spark-kernel-dsv2"))
       "org.junit.jupiter" % "junit-jupiter-params" % "5.8.2" % "test",
       "net.aichler" % "jupiter-interface" % "0.11.1" % "test"
     ),
-    Test / testOptions += Tests.Argument(TestFrameworks.JUnit, "-v", "-a")
+    Test / testOptions += Tests.Argument(TestFrameworks.JUnit, "-v", "-a"),
+    // Assembly configuration for fat jar
+    assembly / assemblyJarName := s"${name.value}_${scalaBinaryVersion.value}-${version.value}-with-dependencies.jar",
+    assembly / logLevel := Level.Info,
+    assembly / test := {},
+    assembly / assemblyMergeStrategy := {
+      // Discard all module-info.class files to fix different file contents error
+      case "module-info.class" => MergeStrategy.discard
+      case PathList("META-INF", "versions", "9", "module-info.class") => MergeStrategy.discard
+      case PathList("META-INF", "versions", xs @ _*) => MergeStrategy.discard  
+      case PathList("META-INF", "services", xs @ _*) => MergeStrategy.filterDistinctLines
+      case PathList("META-INF", xs @ _*) =>
+        xs.map(_.toLowerCase) match {
+          case "manifest.mf" :: Nil | "index.list" :: Nil | "dependencies" :: Nil =>
+            MergeStrategy.discard
+          case ps @ (x :: xs) if ps.last.endsWith(".sf") || ps.last.endsWith(".dsa") =>
+            MergeStrategy.discard
+          case "plexus" :: xs => MergeStrategy.discard
+          case _ => MergeStrategy.first
+        }
+      case x => MergeStrategy.first
+    }
   )
-  // TODO to enable unit doc for sparkKernelDsv2.
+// TODO to enable unit doc for sparkKernelDsv2.
 
 lazy val unity = (project in file("unity"))
   .enablePlugins(ScalafmtPlugin)
@@ -818,8 +839,8 @@ lazy val storageS3DynamoDB = (project in file("storage-s3-dynamodb"))
   ).configureUnidoc()
 
 val icebergSparkRuntimeArtifactName = {
- val (expMaj, expMin, _) = getMajorMinorPatch(defaultSparkVersion)
- s"iceberg-spark-runtime-$expMaj.$expMin"
+  val (expMaj, expMin, _) = getMajorMinorPatch(defaultSparkVersion)
+  s"iceberg-spark-runtime-$expMaj.$expMin"
 }
 
 lazy val testDeltaIcebergJar = (project in file("testDeltaIcebergJar"))
@@ -1684,7 +1705,7 @@ lazy val kernelGroup = project
     publish / skip := false,
     unidocSourceFilePatterns := {
       (kernelApi / unidocSourceFilePatterns).value.scopeToProject(kernelApi) ++
-      (kernelDefaults / unidocSourceFilePatterns).value.scopeToProject(kernelDefaults)
+        (kernelDefaults / unidocSourceFilePatterns).value.scopeToProject(kernelDefaults)
     }
   ).configureUnidoc(docTitle = "Delta Kernel")
 
