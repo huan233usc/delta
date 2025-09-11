@@ -746,6 +746,27 @@ lazy val sparkKernelDsv2 = (project in file("spark-kernel-dsv2"))
       "net.aichler" % "jupiter-interface" % "0.11.1" % "test"
     ),
     Test / testOptions += Tests.Argument(TestFrameworks.JUnit, "-v", "-a"),
+    // Assembly configuration for fat jar
+    assembly / assemblyJarName := s"${name.value}_${scalaBinaryVersion.value}-${version.value}-with-dependencies.jar",
+    assembly / logLevel := Level.Info,
+    assembly / test := {},
+    assembly / assemblyMergeStrategy := {
+      // Discard all module-info.class files to fix different file contents error
+      case "module-info.class" => MergeStrategy.discard
+      case PathList("META-INF", "versions", "9", "module-info.class") => MergeStrategy.discard
+      case PathList("META-INF", "versions", xs @ _*) => MergeStrategy.discard  
+      case PathList("META-INF", "services", xs @ _*) => MergeStrategy.filterDistinctLines
+      case PathList("META-INF", xs @ _*) =>
+        xs.map(_.toLowerCase) match {
+          case "manifest.mf" :: Nil | "index.list" :: Nil | "dependencies" :: Nil =>
+            MergeStrategy.discard
+          case ps @ (x :: xs) if ps.last.endsWith(".sf") || ps.last.endsWith(".dsa") =>
+            MergeStrategy.discard
+          case "plexus" :: xs => MergeStrategy.discard
+          case _ => MergeStrategy.first
+        }
+      case x => MergeStrategy.first
+    }
   )
 // TODO to enable unit doc for sparkKernelDsv2.
 

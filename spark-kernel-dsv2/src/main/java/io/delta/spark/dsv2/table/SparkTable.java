@@ -78,17 +78,13 @@ public class SparkTable implements Table, SupportsRead {
         partColNames.stream().map(Expressions::identity).toArray(Transform[]::new);
   }
 
-
   /**
    * Creates a new DeltaKernelTable instance.
    *
    * @param identifier the table identifier
    * @param hadoopConf the Hadoop configuration to use for creating the engine
    */
-  public SparkTable(
-      Identifier identifier,
-      SnapshotImpl snapshot,
-      Configuration hadoopConf) {
+  public SparkTable(Identifier identifier, SnapshotImpl snapshot, Configuration hadoopConf) {
     this.identifier = requireNonNull(identifier, "identifier is null");
     this.tablePath = requireNonNull(snapshot.getPath(), "snapshot is null");
     this.hadoopConf = requireNonNull(hadoopConf, "hadoop conf is null");

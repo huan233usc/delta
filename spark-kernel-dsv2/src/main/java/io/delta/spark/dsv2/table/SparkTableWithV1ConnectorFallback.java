@@ -7,19 +7,15 @@ import org.apache.spark.sql.connector.catalog.Table;
 
 public class SparkTableWithV1ConnectorFallback extends SparkTable {
 
-    private final Table fallback;
+  private final Table fallback;
 
-    public SparkTableWithV1ConnectorFallback(
-            Identifier identifier,
-            SnapshotImpl snapshot,
-            Configuration hadoopConf,
-            Table v1Fallback) {
-        super(identifier,snapshot,hadoopConf);
-        this.fallback  =v1Fallback;
-    }
+  public SparkTableWithV1ConnectorFallback(
+      Identifier identifier, SnapshotImpl snapshot, Configuration hadoopConf, Table v1Fallback) {
+    super(identifier, snapshot, hadoopConf);
+    this.fallback = v1Fallback;
+  }
 
-    public Table getFallback() {
-        return fallback;
-    }
-
+  public Table getFallback() {
+    return fallback;
+  }
 }

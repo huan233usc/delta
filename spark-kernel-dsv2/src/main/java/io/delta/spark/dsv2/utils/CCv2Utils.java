@@ -2,7 +2,6 @@ package io.delta.spark.dsv2.utils;
 
 import io.delta.kernel.defaults.engine.DefaultEngine;
 import io.delta.kernel.internal.SnapshotImpl;
-import io.delta.spark.dsv2.table.SparkTable;
 import io.delta.spark.dsv2.table.SparkTableWithV1ConnectorFallback;
 import io.delta.storage.commit.uccommitcoordinator.UCClient;
 import io.delta.storage.commit.uccommitcoordinator.UCCommitCoordinatorClient;

@@ -98,7 +98,8 @@ public class SparkMicroBatchStream
     LOG.info("Getting initial offset for Delta streaming");
     // Use the starting version if specified, otherwise use the current snapshot version
     long version = tableHelper.getCurrentSnapshot().getVersion();
-    return DeltaSourceOffset.apply(tableId, snapshotAtSourceInit.getVersion(), DeltaSourceOffset.BASE_INDEX(), true);
+    return DeltaSourceOffset.apply(
+        tableId, snapshotAtSourceInit.getVersion(), DeltaSourceOffset.BASE_INDEX(), true);
   }
 
   /**
