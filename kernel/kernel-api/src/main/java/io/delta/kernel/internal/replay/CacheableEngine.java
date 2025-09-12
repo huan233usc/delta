@@ -101,19 +101,19 @@ public class CacheableEngine implements Engine {
 
     private CloseableIterator<ColumnarBatch> getCacheOrLoad(
         FileStatus fileStatus, StructType schema) {
-      List<ColumnarBatch> res =  JSON_CACHE.computeIfAbsent(
-          JsonFileKey.of(fileStatus, schema),
-          key -> directReadAsInMemory(key.fileStatus, key.schema));
+      List<ColumnarBatch> res =
+          JSON_CACHE.computeIfAbsent(
+              JsonFileKey.of(fileStatus, schema),
+              key -> directReadAsInMemory(key.fileStatus, key.schema));
 
       return asCloseableIterator(res);
     }
 
-    private List<ColumnarBatch> directReadAsInMemory(
-        FileStatus fileStatus, StructType schema) {
+    private List<ColumnarBatch> directReadAsInMemory(FileStatus fileStatus, StructType schema) {
       try {
         CloseableIterator<ColumnarBatch> closeableIterator =
-                jsonHandler
-                .readJsonFiles(singletonCloseableIterator(fileStatus), schema, Optional.empty());
+            jsonHandler.readJsonFiles(
+                singletonCloseableIterator(fileStatus), schema, Optional.empty());
 
         return asInMemoryList(closeableIterator);
       } catch (IOException e) {
@@ -150,15 +150,13 @@ public class CacheableEngine implements Engine {
     public boolean equals(Object o) {
       if (o instanceof JsonFileKey) {
         JsonFileKey other = (JsonFileKey) o;
-        return Objects.equals(fileStatus, other.fileStatus)
-                && Objects.equals(schema, other.schema);
+        return Objects.equals(fileStatus, other.fileStatus) && Objects.equals(schema, other.schema);
       }
       return false;
     }
   }
 
-  private static List<ColumnarBatch> asInMemoryList(
-      CloseableIterator<ColumnarBatch> iterator) {
+  private static List<ColumnarBatch> asInMemoryList(CloseableIterator<ColumnarBatch> iterator) {
 
     // Make it to be an in-memory array list.
     List<ColumnarBatch> list = new ArrayList<>();
@@ -174,8 +172,7 @@ public class CacheableEngine implements Engine {
     return list;
   }
 
-  private static CloseableIterator<ColumnarBatch> asCloseableIterator(
-      List<ColumnarBatch> list) {
+  private static CloseableIterator<ColumnarBatch> asCloseableIterator(List<ColumnarBatch> list) {
     return new CloseableIterator<ColumnarBatch>() {
       private int index = 0;
 
