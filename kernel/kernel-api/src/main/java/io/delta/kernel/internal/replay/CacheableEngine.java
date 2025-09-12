@@ -31,6 +31,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class CacheableEngine implements Engine {
+  // NOTICE: THIS IS EXACTLY THE JSON META CACHE.
   private static final Map<JsonFileKey, CloseableIterator<ColumnarBatch>> JSON_CACHE =
       new ConcurrentHashMap<>();
   private final Engine engine;
@@ -46,7 +47,7 @@ public class CacheableEngine implements Engine {
 
   @Override
   public JsonHandler getJsonHandler() {
-    return new CacheableJsonHandler();
+    return new CacheableJsonHandler(engine);
   }
 
   @Override
@@ -56,10 +57,18 @@ public class CacheableEngine implements Engine {
 
   @Override
   public ParquetHandler getParquetHandler() {
+    // TODO: Do we need to wrap it as a cache handler also ? But the question is, for parquet
+    // TODO: handle, it usually read with a push down predicate, and the predicate is always
+    // TODO: changing, also it's hard to hit the cache even if we implement a new cache.
     return engine.getParquetHandler();
   }
 
-  private class CacheableJsonHandler implements JsonHandler {
+  private static class CacheableJsonHandler implements JsonHandler {
+    private final Engine engine;
+
+    CacheableJsonHandler(Engine engine){
+      this.engine = engine;
+    }
 
     @Override
     public ColumnarBatch parseJson(
@@ -96,10 +105,10 @@ public class CacheableEngine implements Engine {
         FileStatus fileStatus, StructType schema) {
       return JSON_CACHE.computeIfAbsent(
           JsonFileKey.of(fileStatus, schema),
-          key -> directReadAsMemory(key.fileStatus, key.schema));
+          key -> directReadAsInMemory(key.fileStatus, key.schema));
     }
 
-    private CloseableIterator<ColumnarBatch> directReadAsMemory(
+    private CloseableIterator<ColumnarBatch> directReadAsInMemory(
         FileStatus fileStatus, StructType schema) {
       try {
         CloseableIterator<ColumnarBatch> closeableIterator =
@@ -134,7 +143,7 @@ public class CacheableEngine implements Engine {
     }
   }
 
-  private CloseableIterator<ColumnarBatch> asInMemoryCloseableIterator(
+  private static CloseableIterator<ColumnarBatch> asInMemoryCloseableIterator(
       CloseableIterator<ColumnarBatch> iterator) {
 
     // Make it to be an in-memory array list.
@@ -166,7 +175,7 @@ public class CacheableEngine implements Engine {
     };
   }
 
-  private CloseableIterator<ColumnarBatch> emptyCloseableIterator() {
+  private static CloseableIterator<ColumnarBatch> emptyCloseableIterator() {
     return new CloseableIterator<ColumnarBatch>() {
       @Override
       public boolean hasNext() {
