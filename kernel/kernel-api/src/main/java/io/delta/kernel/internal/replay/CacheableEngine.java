@@ -28,12 +28,10 @@ import io.delta.kernel.utils.FileStatus;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
 public class CacheableEngine implements Engine {
   // NOTICE: THIS IS EXACTLY THE JSON META CACHE.
-  private static final Map<JsonFileKey, CloseableIterator<ColumnarBatch>> JSON_CACHE =
-      new ConcurrentHashMap<>();
+  private static final Map<JsonFileKey, List<ColumnarBatch>> JSON_CACHE = new HashMap<>();
   private final Engine engine;
 
   public CacheableEngine(Engine engine) {
@@ -103,19 +101,21 @@ public class CacheableEngine implements Engine {
 
     private CloseableIterator<ColumnarBatch> getCacheOrLoad(
         FileStatus fileStatus, StructType schema) {
-      return JSON_CACHE.computeIfAbsent(
+      List<ColumnarBatch> res =  JSON_CACHE.computeIfAbsent(
           JsonFileKey.of(fileStatus, schema),
           key -> directReadAsInMemory(key.fileStatus, key.schema));
+
+      return asCloseableIterator(res);
     }
 
-    private CloseableIterator<ColumnarBatch> directReadAsInMemory(
+    private List<ColumnarBatch> directReadAsInMemory(
         FileStatus fileStatus, StructType schema) {
       try {
         CloseableIterator<ColumnarBatch> closeableIterator =
                 jsonHandler
                 .readJsonFiles(singletonCloseableIterator(fileStatus), schema, Optional.empty());
 
-        return asInMemoryCloseableIterator(closeableIterator);
+        return asInMemoryList(closeableIterator);
       } catch (IOException e) {
         throw new UncheckedIOException(e);
       }
@@ -157,7 +157,7 @@ public class CacheableEngine implements Engine {
     }
   }
 
-  private static CloseableIterator<ColumnarBatch> asInMemoryCloseableIterator(
+  private static List<ColumnarBatch> asInMemoryList(
       CloseableIterator<ColumnarBatch> iterator) {
 
     // Make it to be an in-memory array list.
@@ -171,6 +171,11 @@ public class CacheableEngine implements Engine {
     }
 
     // Wrap it as a CloseableIterator.
+    return list;
+  }
+
+  private static CloseableIterator<ColumnarBatch> asCloseableIterator(
+      List<ColumnarBatch> list) {
     return new CloseableIterator<ColumnarBatch>() {
       private int index = 0;
 

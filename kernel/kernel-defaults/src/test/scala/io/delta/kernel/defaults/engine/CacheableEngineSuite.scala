@@ -16,16 +16,16 @@
 package io.delta.kernel.defaults.engine
 
 import io.delta.kernel.Table
-import io.delta.kernel.defaults.MetricsEngine
 import io.delta.kernel.defaults.engine.hadoopio.HadoopFileIO
 import io.delta.kernel.defaults.utils.{TestUtils, WriteUtils}
+import io.delta.kernel.engine.Engine
 import io.delta.kernel.internal.replay.CacheableEngine
 import org.apache.hadoop.conf.Configuration
 import org.scalatest.funsuite.AnyFunSuite
 
 class CacheableEngineSuite extends AnyFunSuite with WriteUtils with TestUtils {
 
-  protected def withTempDirAndMetricsEngine(f: (String, MetricsEngine) => Unit): Unit = {
+  protected def withTempDirAndEngine(f: (String, Engine) => Unit): Unit = {
     val hadoopFileIO = new HadoopFileIO(new Configuration() {
       {
         // Set the batch sizes to small so that we get to test the multiple batch scenarios.
@@ -34,7 +34,7 @@ class CacheableEngineSuite extends AnyFunSuite with WriteUtils with TestUtils {
       }
     })
 
-    val engine = new MetricsEngine(hadoopFileIO)
+    val engine = DefaultEngine.create(hadoopFileIO)
 
     withTempDir { dir =>
       f(dir.getAbsolutePath, engine)
@@ -42,7 +42,7 @@ class CacheableEngineSuite extends AnyFunSuite with WriteUtils with TestUtils {
   }
 
   test("Test the cacheable engine suite.") {
-    withTempDirAndMetricsEngine{ (path, engine) =>
+    withTempDirAndEngine{ (path: String, engine: Engine) =>
       for ( _ <- 0 to 9 ) {
         spark.range(10).write.format("delta").mode("append").save(path)
       }
