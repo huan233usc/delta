@@ -19,6 +19,7 @@ import io.delta.kernel.Table
 import io.delta.kernel.defaults.MetricsEngine
 import io.delta.kernel.defaults.engine.hadoopio.HadoopFileIO
 import io.delta.kernel.defaults.utils.{TestUtils, WriteUtils}
+import io.delta.kernel.internal.replay.CacheableEngine
 import org.apache.hadoop.conf.Configuration
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -47,13 +48,13 @@ class CacheableEngineSuite extends AnyFunSuite with WriteUtils with TestUtils {
       }
       assert(100 == spark.read.format("delta").load(path).count())
 
-//      val cacheableEngine = new CacheableEngine(engine);
-      val table = Table.forPath(engine, path)
+      val cacheableEngine = new CacheableEngine(engine);
+      val table = Table.forPath(cacheableEngine, path)
 
-      val snapshot = table.getLatestSnapshot(engine)
+      val snapshot = table.getLatestSnapshot(cacheableEngine)
       val scan = snapshot.getScanBuilder.build
 
-      using(scan.getScanFiles(engine)) { it =>
+      using(scan.getScanFiles(cacheableEngine)) { it =>
         var fileCount = 0
         while (it.hasNext) {
           val batch = it.next
