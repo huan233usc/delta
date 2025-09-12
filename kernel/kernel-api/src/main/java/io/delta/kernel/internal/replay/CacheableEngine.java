@@ -47,7 +47,7 @@ public class CacheableEngine implements Engine {
 
   @Override
   public JsonHandler getJsonHandler() {
-    return new CacheableJsonHandler(engine);
+    return new CacheableJsonHandler(engine.getJsonHandler());
   }
 
   @Override
@@ -64,10 +64,10 @@ public class CacheableEngine implements Engine {
   }
 
   private static class CacheableJsonHandler implements JsonHandler {
-    private final Engine engine;
+    private final JsonHandler jsonHandler;
 
-    CacheableJsonHandler(Engine engine) {
-      this.engine = engine;
+    CacheableJsonHandler(JsonHandler jsonHandler) {
+      this.jsonHandler = jsonHandler;
     }
 
     @Override
@@ -75,7 +75,7 @@ public class CacheableEngine implements Engine {
         ColumnVector jsonStringVector,
         StructType outputSchema,
         Optional<ColumnVector> selectionVector) {
-      return engine.getJsonHandler().parseJson(jsonStringVector, outputSchema, selectionVector);
+      return jsonHandler.parseJson(jsonStringVector, outputSchema, selectionVector);
     }
 
     @Override
@@ -86,7 +86,7 @@ public class CacheableEngine implements Engine {
         throws IOException {
       if (predicate.isPresent()) {
         // No cache if predicate is present, since hard to hit the predicate cache.
-        return engine.getJsonHandler().readJsonFiles(fileIter, physicalSchema, predicate);
+        return jsonHandler.readJsonFiles(fileIter, physicalSchema, predicate);
       } else {
         // Fetch the target iterator.
         List<CloseableIterator<ColumnarBatch>> results =
@@ -112,8 +112,7 @@ public class CacheableEngine implements Engine {
         FileStatus fileStatus, StructType schema) {
       try {
         CloseableIterator<ColumnarBatch> closeableIterator =
-            engine
-                .getJsonHandler()
+                jsonHandler
                 .readJsonFiles(singletonCloseableIterator(fileStatus), schema, Optional.empty());
 
         return asInMemoryCloseableIterator(closeableIterator);
@@ -125,7 +124,7 @@ public class CacheableEngine implements Engine {
     @Override
     public void writeJsonFileAtomically(
         String filePath, CloseableIterator<Row> data, boolean overwrite) throws IOException {
-      engine.getJsonHandler().writeJsonFileAtomically(filePath, data, overwrite);
+      jsonHandler.writeJsonFileAtomically(filePath, data, overwrite);
     }
   }
 
