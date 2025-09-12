@@ -66,7 +66,7 @@ public class CacheableEngine implements Engine {
   private static class CacheableJsonHandler implements JsonHandler {
     private final Engine engine;
 
-    CacheableJsonHandler(Engine engine){
+    CacheableJsonHandler(Engine engine) {
       this.engine = engine;
     }
 
