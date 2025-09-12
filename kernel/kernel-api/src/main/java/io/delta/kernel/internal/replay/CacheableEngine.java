@@ -141,6 +141,21 @@ public class CacheableEngine implements Engine {
     static JsonFileKey of(FileStatus fileStatus, StructType schema) {
       return new JsonFileKey(fileStatus, schema);
     }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(fileStatus, schema);
+    }
+
+    @Override
+    public boolean equals(Object o) {
+      if (o instanceof JsonFileKey) {
+        JsonFileKey other = (JsonFileKey) o;
+        return Objects.equals(fileStatus, other.fileStatus)
+                && Objects.equals(schema, other.schema);
+      }
+      return false;
+    }
   }
 
   private static CloseableIterator<ColumnarBatch> asInMemoryCloseableIterator(

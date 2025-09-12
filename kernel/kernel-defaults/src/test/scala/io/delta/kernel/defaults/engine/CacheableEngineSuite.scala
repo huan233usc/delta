@@ -54,19 +54,28 @@ class CacheableEngineSuite extends AnyFunSuite with WriteUtils with TestUtils {
       val snapshot = table.getLatestSnapshot(cacheableEngine)
       val scan = snapshot.getScanBuilder.build
 
-      using(scan.getScanFiles(cacheableEngine)) { it =>
-        var fileCount = 0
-        while (it.hasNext) {
-          val batch = it.next
-          using(batch.getRows) { fileIter =>
-            while (fileIter.hasNext) {
-              fileIter.next()
-              fileCount += 1
+      // Try to access those metadata once.
+      def accessAllMetadata(): Unit = {
+        using(scan.getScanFiles(cacheableEngine)) { it =>
+          var fileCount = 0
+          while (it.hasNext) {
+            val batch = it.next
+            using(batch.getRows) { fileIter =>
+              while (fileIter.hasNext) {
+                fileIter.next()
+                fileCount += 1
+              }
             }
           }
+          assert(fileCount == 10)
         }
-        assert(fileCount == 10)
       }
+
+      // For the first time.
+      accessAllMetadata()
+
+      // For the second time.
+      accessAllMetadata()
     }
   }
 
