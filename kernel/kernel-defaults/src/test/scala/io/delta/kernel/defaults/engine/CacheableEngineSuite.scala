@@ -20,6 +20,7 @@ import io.delta.kernel.defaults.engine.hadoopio.HadoopFileIO
 import io.delta.kernel.defaults.utils.{TestUtils, WriteUtils}
 import io.delta.kernel.engine.Engine
 import io.delta.kernel.internal.replay.CacheableEngine
+
 import org.apache.hadoop.conf.Configuration
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -42,8 +43,8 @@ class CacheableEngineSuite extends AnyFunSuite with WriteUtils with TestUtils {
   }
 
   test("Test the cacheable engine suite.") {
-    withTempDirAndEngine{ (path: String, engine: Engine) =>
-      for ( _ <- 0 to 9 ) {
+    withTempDirAndEngine { (path: String, engine: Engine) =>
+      for (_ <- 0 to 9) {
         spark.range(10).write.format("delta").mode("append").save(path)
       }
       assert(100 == spark.read.format("delta").load(path).count())
