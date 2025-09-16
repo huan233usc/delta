@@ -25,11 +25,17 @@ import io.delta.kernel.expressions.Predicate;
 import io.delta.kernel.types.StructType;
 import io.delta.kernel.utils.CloseableIterator;
 import io.delta.kernel.utils.FileStatus;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class CacheableEngine implements Engine {
+  private static final Logger LOG = LoggerFactory.getLogger(CacheableEngine.class);
+
   // NOTICE: THIS IS EXACTLY THE JSON META CACHE.
   private static final Map<JsonFileKey, List<ColumnarBatch>> JSON_CACHE = new HashMap<>();
   private final Engine engine;
@@ -101,10 +107,16 @@ public class CacheableEngine implements Engine {
 
     private CloseableIterator<ColumnarBatch> getCacheOrLoad(
         FileStatus fileStatus, StructType schema) {
+
+      AtomicBoolean cacheHit = new AtomicBoolean(true);
       List<ColumnarBatch> res =
           JSON_CACHE.computeIfAbsent(
               JsonFileKey.of(fileStatus, schema),
-              key -> directReadAsInMemory(key.fileStatus, key.schema));
+              key -> {
+                cacheHit.set(false);
+                return directReadAsInMemory(key.fileStatus, key.schema);
+              });
+      LOG.info("Cache Key missed or hit ? {}", cacheHit.get());
 
       return asCloseableIterator(res);
     }
@@ -153,6 +165,15 @@ public class CacheableEngine implements Engine {
         return Objects.equals(fileStatus, other.fileStatus) && Objects.equals(schema, other.schema);
       }
       return false;
+    }
+
+    @Override
+    public String toString(){
+      StringBuilder builder = new StringBuilder();
+      builder.append("path=").append(fileStatus.getPath())
+              .append(",")
+              .append("schema=").append(schema);
+      return builder.toString();
     }
   }
 
