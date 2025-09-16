@@ -70,10 +70,6 @@ public class ScanImpl implements Scan {
   private final SnapshotReport snapshotReport;
   private final ScanMetrics scanMetrics = new ScanMetrics();
 
-  // Cache for scan file data - store the actual data so we can create multiple iterators
-  private List<FilteredColumnarBatch> cachedScanFileData;
-  private boolean cacheValid = false;
-
   public ScanImpl(
       StructType snapshotSchema,
       StructType readSchema,
@@ -136,10 +132,6 @@ public class ScanImpl implements Scan {
    */
   protected CloseableIterator<FilteredColumnarBatch> getScanFiles(
       Engine engine, boolean includeStats, Optional<PaginationContext> paginationContextOpt) {
-    // Check if cache is valid and return iterator from cached data
-    if (cacheValid && cachedScanFileData != null) {
-      return createIteratorFromCachedData();
-    }
 
     // Generate data skipping filter and decide if we should read the stats column
     Optional<DataSkippingPredicate> dataSkippingFilter = getDataSkippingFilter();
@@ -185,19 +177,6 @@ public class ScanImpl implements Scan {
               scanMetrics,
               paginationContextOpt);
 
-      List<FilteredColumnarBatch> dataList = new ArrayList<>();
-      try {
-        while (scanFileIter.hasNext()) {
-          dataList.add(scanFileIter.next());
-        }
-        cachedScanFileData = dataList;
-      } finally {
-        // Skip close for POC testing to avoid IOException
-        // result.close();
-      }
-
-      scanFileIter = createIteratorFromCachedData();
-
       // Apply partition pruning
       scanFileIter = applyPartitionPruning(engine, scanFileIter);
 
@@ -231,46 +210,6 @@ public class ScanImpl implements Scan {
   @Override
   public Optional<Predicate> getRemainingFilter() {
     return getDataFilters();
-  }
-
-  /**
-   * Reset the filter predicate and invalidate cache. This will recalculate the filter and
-   * partitionAndDataFilters.
-   *
-   * @param filter the new filter predicate
-   */
-  public void resetFilter(Optional<Predicate> filter) {
-    this.filter = filter;
-    this.partitionAndDataFilters = splitFilters(filter);
-  }
-
-  /**
-   * Creates a new CloseableIterator from cached scan file data. This allows getScanFiles to be
-   * called multiple times.
-   */
-  private CloseableIterator<FilteredColumnarBatch> createIteratorFromCachedData() {
-    if (cachedScanFileData == null) {
-      throw new IllegalStateException("No cached data available");
-    }
-
-    return new CloseableIterator<FilteredColumnarBatch>() {
-      private final Iterator<FilteredColumnarBatch> iterator = cachedScanFileData.iterator();
-
-      @Override
-      public boolean hasNext() {
-        return iterator.hasNext();
-      }
-
-      @Override
-      public FilteredColumnarBatch next() {
-        return iterator.next();
-      }
-
-      @Override
-      public void close() throws IOException {
-        // No resources to close for cached data iterator
-      }
-    };
   }
 
   /**
@@ -505,12 +444,12 @@ public class ScanImpl implements Scan {
 
       @Override
       public boolean hasNext() {
-        return wrapWithErrorReporting(() -> scanIter.hasNext());
+        return wrapWithErrorReporting(scanIter::hasNext);
       }
 
       @Override
       public FilteredColumnarBatch next() {
-        return wrapWithErrorReporting(() -> scanIter.next());
+        return wrapWithErrorReporting(scanIter::next);
       }
 
       private <T> T wrapWithErrorReporting(Supplier<T> s) {
