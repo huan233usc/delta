@@ -113,7 +113,7 @@ public class ActionsIterator implements CloseableIterator<ActionWrapper> {
       StructType checkpointReadSchema,
       Optional<Predicate> checkpointPredicate,
       Optional<PaginationContext> paginationContextOpt) {
-    this.engine = engine;
+    this.engine = new CacheableEngine(engine);
     this.checkpointPredicate = checkpointPredicate;
     this.filesList = new LinkedList<>();
     this.paginationContextOpt = paginationContextOpt;
