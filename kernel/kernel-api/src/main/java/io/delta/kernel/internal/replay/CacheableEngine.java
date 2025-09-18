@@ -19,25 +19,31 @@ import static io.delta.kernel.internal.util.Utils.singletonCloseableIterator;
 
 import io.delta.kernel.data.ColumnVector;
 import io.delta.kernel.data.ColumnarBatch;
+import io.delta.kernel.data.FilteredColumnarBatch;
 import io.delta.kernel.data.Row;
 import io.delta.kernel.engine.*;
+import io.delta.kernel.expressions.Column;
 import io.delta.kernel.expressions.Predicate;
 import io.delta.kernel.types.StructType;
 import io.delta.kernel.utils.CloseableIterator;
+import io.delta.kernel.utils.DataFileStatus;
 import io.delta.kernel.utils.FileStatus;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class CacheableEngine implements Engine {
   private static final Logger LOG = LoggerFactory.getLogger(CacheableEngine.class);
 
   // NOTICE: THIS IS EXACTLY THE JSON META CACHE.
   private static final Map<JsonFileKey, List<ColumnarBatch>> JSON_CACHE = new HashMap<>();
+
+  // NOTICE: THIS IS EXACTLY THE PARQUET META CACHE.
+  private static final Map<ParquetKey, List<FileReadResult>> PARQUET_CACHE = new HashMap<>();
+
   private final Engine engine;
 
   public CacheableEngine(Engine engine) {
@@ -61,10 +67,78 @@ public class CacheableEngine implements Engine {
 
   @Override
   public ParquetHandler getParquetHandler() {
-    // TODO: Do we need to wrap it as a cache handler also ? But the question is, for parquet
-    // TODO: handle, it usually read with a push down predicate, and the predicate is always
-    // TODO: changing, also it's hard to hit the cache even if we implement a new cache.
-    return engine.getParquetHandler();
+    return new CacheableParquetHandler(engine.getParquetHandler());
+  }
+
+  private static class CacheableParquetHandler implements ParquetHandler {
+    private final ParquetHandler parquetHandler;
+
+    CacheableParquetHandler(ParquetHandler parquetHandler) {
+      this.parquetHandler = parquetHandler;
+    }
+
+    @Override
+    public CloseableIterator<FileReadResult> readParquetFiles(
+        CloseableIterator<FileStatus> fileIter,
+        StructType physicalSchema,
+        Optional<Predicate> predicate) {
+      // Fetch the target iterator.
+      List<CloseableIterator<FileReadResult>> results =
+          fileIter
+              .map(fileStatus -> getCacheOrLoad(fileStatus, physicalSchema, predicate))
+              .toInMemoryList();
+
+      // Combine all of them into a combined one.
+      CloseableIterator<FileReadResult> result = emptyCloseableIterator();
+      for (CloseableIterator<FileReadResult> it : results) {
+        result = result.combine(it);
+      }
+      return result;
+    }
+
+    @Override
+    public CloseableIterator<DataFileStatus> writeParquetFiles(
+        String directoryPath,
+        CloseableIterator<FilteredColumnarBatch> dataIter,
+        List<Column> statsColumns)
+        throws IOException {
+      return parquetHandler.writeParquetFiles(directoryPath, dataIter, statsColumns);
+    }
+
+    @Override
+    public void writeParquetFileAtomically(
+        String filePath, CloseableIterator<FilteredColumnarBatch> data) throws IOException {
+      parquetHandler.writeParquetFileAtomically(filePath, data);
+    }
+
+    private CloseableIterator<FileReadResult> getCacheOrLoad(
+        FileStatus fileStatus, StructType schema, Optional<Predicate> predicate) {
+
+      AtomicBoolean cacheHit = new AtomicBoolean(true);
+      List<FileReadResult> res =
+          PARQUET_CACHE.computeIfAbsent(
+              new ParquetKey(fileStatus, schema, predicate),
+              key -> {
+                cacheHit.set(false);
+                return directReadAsInMemory(key.fileStatus, key.schema, key.predicate);
+              });
+      LOG.info("---> Parquet READ --> Cache Key missed or hit ? {}", cacheHit.get());
+
+      return asCloseableIterator(res);
+    }
+
+    private List<FileReadResult> directReadAsInMemory(
+        FileStatus fileStatus, StructType schema, Optional<Predicate> predicate) {
+      try {
+        CloseableIterator<FileReadResult> closeableIterator =
+            parquetHandler.readParquetFiles(
+                singletonCloseableIterator(fileStatus), schema, predicate);
+
+        return asInMemoryList(closeableIterator);
+      } catch (IOException e) {
+        throw new UncheckedIOException(e);
+      }
+    }
   }
 
   private static class CacheableJsonHandler implements JsonHandler {
@@ -116,7 +190,7 @@ public class CacheableEngine implements Engine {
                 cacheHit.set(false);
                 return directReadAsInMemory(key.fileStatus, key.schema);
               });
-      LOG.info("Cache Key missed or hit ? {}", cacheHit.get());
+      LOG.info("--> JSON READ --> Cache Key missed or hit ? {}", cacheHit.get());
 
       return asCloseableIterator(res);
     }
@@ -137,6 +211,35 @@ public class CacheableEngine implements Engine {
     public void writeJsonFileAtomically(
         String filePath, CloseableIterator<Row> data, boolean overwrite) throws IOException {
       jsonHandler.writeJsonFileAtomically(filePath, data, overwrite);
+    }
+  }
+
+  private static class ParquetKey {
+    private final FileStatus fileStatus;
+    private final StructType schema;
+    private final Optional<Predicate> predicate;
+
+    ParquetKey(FileStatus fileStatus, StructType schema, Optional<Predicate> predicate) {
+      this.fileStatus = fileStatus;
+      this.schema = schema;
+      this.predicate = predicate;
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(fileStatus, schema, predicate);
+    }
+
+    @Override
+    public boolean equals(Object o) {
+      if (o instanceof ParquetKey) {
+        ParquetKey other = (ParquetKey) o;
+        return Objects.equals(fileStatus, other.fileStatus)
+            && Objects.equals(schema, other.schema)
+            && Objects.equals(predicate, other.predicate);
+      }
+
+      return false;
     }
   }
 
@@ -168,20 +271,23 @@ public class CacheableEngine implements Engine {
     }
 
     @Override
-    public String toString(){
+    public String toString() {
       StringBuilder builder = new StringBuilder();
-      builder.append("path=").append(fileStatus.getPath())
-              .append(",")
-              .append("schema=").append(schema);
+      builder
+          .append("path=")
+          .append(fileStatus.getPath())
+          .append(",")
+          .append("schema=")
+          .append(schema);
       return builder.toString();
     }
   }
 
-  private static List<ColumnarBatch> asInMemoryList(CloseableIterator<ColumnarBatch> iterator) {
+  private static <T> List<T> asInMemoryList(CloseableIterator<T> iterator) {
 
     // Make it to be an in-memory array list.
-    List<ColumnarBatch> list = new ArrayList<>();
-    try (CloseableIterator<ColumnarBatch> ignored = iterator) {
+    List<T> list = new ArrayList<>();
+    try (CloseableIterator<T> ignored = iterator) {
       while (iterator.hasNext()) {
         list.add(iterator.next());
       }
@@ -193,8 +299,8 @@ public class CacheableEngine implements Engine {
     return list;
   }
 
-  private static CloseableIterator<ColumnarBatch> asCloseableIterator(List<ColumnarBatch> list) {
-    return new CloseableIterator<ColumnarBatch>() {
+  private static <T> CloseableIterator<T> asCloseableIterator(List<T> list) {
+    return new CloseableIterator<T>() {
       private int index = 0;
 
       @Override
@@ -203,7 +309,7 @@ public class CacheableEngine implements Engine {
       }
 
       @Override
-      public ColumnarBatch next() {
+      public T next() {
         return list.get(index++);
       }
 
@@ -212,15 +318,15 @@ public class CacheableEngine implements Engine {
     };
   }
 
-  private static CloseableIterator<ColumnarBatch> emptyCloseableIterator() {
-    return new CloseableIterator<ColumnarBatch>() {
+  private static <T> CloseableIterator<T> emptyCloseableIterator() {
+    return new CloseableIterator<T>() {
       @Override
       public boolean hasNext() {
         return false;
       }
 
       @Override
-      public ColumnarBatch next() {
+      public T next() {
         throw new NoSuchElementException();
       }
 
