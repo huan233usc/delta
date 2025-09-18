@@ -122,7 +122,7 @@ public class CacheableEngine implements Engine {
                 cacheHit.set(false);
                 return directReadAsInMemory(key.fileStatus, key.schema, key.predicate);
               });
-      LOG.info("---> Parquet READ --> Cache Key missed or hit ? {}", cacheHit.get());
+      System.out.println("---> Parquet READ --> Cache Key missed or hit ?" + cacheHit.get());
 
       return asCloseableIterator(res);
     }
@@ -190,7 +190,7 @@ public class CacheableEngine implements Engine {
                 cacheHit.set(false);
                 return directReadAsInMemory(key.fileStatus, key.schema);
               });
-      LOG.info("--> JSON READ --> Cache Key missed or hit ? {}", cacheHit.get());
+      System.out.println("--> JSON READ --> Cache Key missed or hit ? " + cacheHit.get());
 
       return asCloseableIterator(res);
     }
