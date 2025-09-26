@@ -15,36 +15,17 @@ import java.sql.Timestamp;
 
 import java.util.ArrayList;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicReference;
 
-public class PathBasedTableManager implements DeltaTableManager {
-
-    private final String tablePath;
-    private final AtomicReference<Snapshot> snapshotAtomicReference;
-    private final Engine kernelEngine;
-
+public class PathBasedTableManager extends AbstractDeltaTableManager {
 
     public PathBasedTableManager(String tablePath, Configuration hadoopConf) {
-        this.tablePath = tablePath;
-        this.snapshotAtomicReference = new AtomicReference<>();
-        this.kernelEngine = DefaultEngine.create(hadoopConf);
-
-    }
-
-    @Override
-    public Snapshot unsafeVolatileSnapshot() {
-        Snapshot unsafeVolatileSnapshot = snapshotAtomicReference.get();
-        if(unsafeVolatileSnapshot == null) {
-            return update();
-        }
-        return unsafeVolatileSnapshot;
+        super(tablePath, DefaultEngine.create(hadoopConf));
     }
 
     @Override
     public Snapshot update() {
         Snapshot snapshot = TableManager.loadSnapshot(tablePath).build(kernelEngine);
-        snapshotAtomicReference.set(snapshot);
-        return snapshot;
+        return cacheAndReturn(snapshot);
     }
 
     @Override

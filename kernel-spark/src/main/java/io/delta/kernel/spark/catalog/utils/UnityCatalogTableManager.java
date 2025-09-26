@@ -26,14 +26,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import org.apache.spark. sql. connector. catalog. LookupCatalog. CatalogAndIdentifier;
 import scala.Option;
 import scala.Tuple2;
 import scala.collection.JavaConverters;
 
-public class UnityCatalogTableManager implements DeltaTableManager {
+public class UnityCatalogTableManager extends AbstractDeltaTableManager {
 
     /** Prefix for Spark SQL catalog configurations. */
     private static final String SPARK_SQL_CATALOG_PREFIX = "spark.sql.catalog.";
@@ -48,10 +47,7 @@ public class UnityCatalogTableManager implements DeltaTableManager {
     private static final String TOKEN_SUFFIX = "token";
 
     private final UCCatalogManagedClient ucCatalogManagedClient;
-    private final String tablePath;
     private final String ucTableId;
-    private final AtomicReference<Snapshot> snapshotAtomicReference;
-    private final Engine kernelEngine;
 
     public static UnityCatalogTableManager create(CatalogTable catalogTable) {
         SparkSession spark = SparkSession.active();
@@ -180,27 +176,15 @@ public class UnityCatalogTableManager implements DeltaTableManager {
     }
 
     private UnityCatalogTableManager(UCCatalogManagedClient ucCatalogManagedClient, String tablePath, String ucTableId, Engine kernelEngine) {
+        super(tablePath, kernelEngine);
         this.ucCatalogManagedClient = ucCatalogManagedClient;
-        this.tablePath = tablePath;
         this.ucTableId = ucTableId;
-        this.snapshotAtomicReference = new AtomicReference<>();
-        this.kernelEngine = kernelEngine;
-    }
-
-    @Override
-    public Snapshot unsafeVolatileSnapshot() {
-        Snapshot unsafeVolatileSnapshot = snapshotAtomicReference.get();
-        if(unsafeVolatileSnapshot == null) {
-            return update();
-        }
-        return unsafeVolatileSnapshot;
     }
 
     @Override
     public Snapshot update() {
-        Snapshot snapshot = ucCatalogManagedClient.loadSnapshot(kernelEngine, ucTableId, tablePath , Optional.empty());
-        snapshotAtomicReference.set(snapshot);
-        return snapshot;
+        Snapshot snapshot = ucCatalogManagedClient.loadSnapshot(kernelEngine, ucTableId, tablePath, Optional.empty());
+        return cacheAndReturn(snapshot);
     }
 
     @Override
