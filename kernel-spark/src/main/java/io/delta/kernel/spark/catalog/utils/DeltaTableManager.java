@@ -6,7 +6,7 @@ import org.apache.spark.sql.AnalysisException;
 
 import java.sql.Timestamp;
 
-public interface CatalogTableManager {
+public interface DeltaTableManager {
 
     Snapshot unsafeVolatileSnapshot();
 

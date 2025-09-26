@@ -19,13 +19,15 @@ import static io.delta.kernel.spark.utils.ScalaUtils.toScalaMap;
 import static java.util.Objects.requireNonNull;
 
 import io.delta.kernel.internal.SnapshotImpl;
-import io.delta.kernel.spark.catalog.utils.CatalogTableManager;
+import io.delta.kernel.spark.catalog.utils.DeltaTableManager;
+import io.delta.kernel.spark.catalog.utils.DeltaTableManagerFactory;
 import io.delta.kernel.spark.catalog.utils.PathBasedTableManager;
 import io.delta.kernel.spark.read.SparkScanBuilder;
 import io.delta.kernel.spark.utils.SchemaUtils;
 import java.util.*;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.spark.sql.SparkSession;
+import org.apache.spark.sql.catalyst.catalog.CatalogTable;
 import org.apache.spark.sql.connector.catalog.*;
 import org.apache.spark.sql.connector.expressions.Expressions;
 import org.apache.spark.sql.connector.expressions.Transform;
@@ -54,7 +56,57 @@ public class SparkTable implements Table, SupportsRead {
   private final StructType partitionSchema;
   private final Column[] columns;
   private final Transform[] partitionTransforms;
-  private final CatalogTableManager catalogTableManager;
+  private final DeltaTableManager catalogTableManager;
+  private final Optional<CatalogTable> catalogTable;
+
+  public SparkTable(Identifier identifier, CatalogTable catalogTable, Map<String, String> options) {
+    this.identifier = requireNonNull(identifier, "identifier is null");
+    this.tablePath = requireNonNull(catalogTable.location().toString(), "snapshot is null");
+    this.options = options;
+    this.hadoopConf =
+            SparkSession.active().sessionState().newHadoopConfWithOptions(toScalaMap(options));
+    this.catalogTableManager = DeltaTableManagerFactory.create(catalogTable);
+    this.snapshot = (SnapshotImpl) catalogTableManager.unsafeVolatileSnapshot();
+
+    this.schema = SchemaUtils.convertKernelSchemaToSparkSchema(snapshot.getSchema());
+    this.partColNames =
+            Collections.unmodifiableList(new ArrayList<>(snapshot.getPartitionColumnNames()));
+
+    final List<StructField> dataFields = new ArrayList<>();
+    final List<StructField> partitionFields = new ArrayList<>();
+
+    // Build a map for O(1) field lookups to improve performance
+    Map<String, StructField> fieldMap = new HashMap<>();
+    for (StructField field : schema.fields()) {
+      fieldMap.put(field.name(), field);
+    }
+
+    // IMPORTANT: Add partition fields in the exact order specified by partColNames
+    // This is crucial because the order in partColNames may differ from the order
+    // in snapshotSchema, and we need to preserve the partColNames order for
+    // proper partitioning behavior
+    for (String partColName : partColNames) {
+      StructField field = fieldMap.get(partColName);
+      if (field != null) {
+        partitionFields.add(field);
+      }
+    }
+
+    // Add remaining fields as data fields (non-partition columns)
+    // These are fields that exist in the schema but are not partition columns
+    for (StructField field : schema.fields()) {
+      if (!partColNames.contains(field.name())) {
+        dataFields.add(field);
+      }
+    }
+    this.dataSchema = new StructType(dataFields.toArray(new StructField[0]));
+    this.partitionSchema = new StructType(partitionFields.toArray(new StructField[0]));
+
+    this.columns = CatalogV2Util.structTypeToV2Columns(schema);
+    this.partitionTransforms =
+            partColNames.stream().map(Expressions::identity).toArray(Transform[]::new);
+    this.catalogTable = Optional.of(catalogTable);
+  }
 
   /**
    * Creates a SparkTable backed by a Delta Kernel snapshot and initializes Spark-facing metadata
@@ -119,6 +171,7 @@ public class SparkTable implements Table, SupportsRead {
     this.columns = CatalogV2Util.structTypeToV2Columns(schema);
     this.partitionTransforms =
         partColNames.stream().map(Expressions::identity).toArray(Transform[]::new);
+    this.catalogTable = Optional.empty();
   }
 
   /**

@@ -14,12 +14,10 @@ import java.sql.Timestamp;
 
 
 import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
-public class PathBasedTableManager implements CatalogTableManager {
+public class PathBasedTableManager implements DeltaTableManager {
 
     private final String tablePath;
     private final AtomicReference<Snapshot> snapshotAtomicReference;
