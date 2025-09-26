@@ -19,6 +19,8 @@ import static io.delta.kernel.spark.utils.ScalaUtils.toScalaMap;
 import static java.util.Objects.requireNonNull;
 
 import io.delta.kernel.internal.SnapshotImpl;
+import io.delta.kernel.spark.catalog.utils.CatalogTableManager;
+import io.delta.kernel.spark.catalog.utils.PathBasedTableManager;
 import io.delta.kernel.spark.read.SparkScanBuilder;
 import io.delta.kernel.spark.utils.SchemaUtils;
 import java.util.*;
@@ -52,6 +54,7 @@ public class SparkTable implements Table, SupportsRead {
   private final StructType partitionSchema;
   private final Column[] columns;
   private final Transform[] partitionTransforms;
+  private final CatalogTableManager catalogTableManager;
 
   /**
    * Creates a SparkTable backed by a Delta Kernel snapshot and initializes Spark-facing metadata
@@ -76,10 +79,8 @@ public class SparkTable implements Table, SupportsRead {
     this.options = options;
     this.hadoopConf =
         SparkSession.active().sessionState().newHadoopConfWithOptions(toScalaMap(options));
-    this.snapshot =
-        (SnapshotImpl)
-            io.delta.kernel.TableManager.loadSnapshot(tablePath)
-                .build(io.delta.kernel.defaults.engine.DefaultEngine.create(hadoopConf));
+    this.catalogTableManager = new PathBasedTableManager(tablePath, hadoopConf);
+    this.snapshot = (SnapshotImpl) catalogTableManager.unsafeVolatileSnapshot();
 
     this.schema = SchemaUtils.convertKernelSchemaToSparkSchema(snapshot.getSchema());
     this.partColNames =
@@ -169,7 +170,7 @@ public class SparkTable implements Table, SupportsRead {
     Map<String, String> combined = new HashMap<>(this.options);
     combined.putAll(scanOptions.asCaseSensitiveMap());
     CaseInsensitiveStringMap merged = new CaseInsensitiveStringMap(combined);
-    return new SparkScanBuilder(name(), tablePath, dataSchema, partitionSchema, snapshot, merged);
+    return new SparkScanBuilder(name(), tablePath, dataSchema, partitionSchema, snapshot, merged, catalogTableManager);
   }
 
   @Override

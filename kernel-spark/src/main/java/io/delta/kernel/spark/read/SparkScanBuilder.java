@@ -20,6 +20,7 @@ import static java.util.Objects.requireNonNull;
 import io.delta.kernel.expressions.And;
 import io.delta.kernel.expressions.Predicate;
 import io.delta.kernel.internal.SnapshotImpl;
+import io.delta.kernel.spark.catalog.utils.CatalogTableManager;
 import io.delta.kernel.spark.utils.ExpressionUtils;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -53,13 +54,16 @@ public class SparkScanBuilder
   private Filter[] pushedSparkFilters;
   private Filter[] dataFilters;
 
+  private final CatalogTableManager catalogTableManager;
+
   public SparkScanBuilder(
       String tableName,
       String tablePath,
       StructType dataSchema,
       StructType partitionSchema,
       SnapshotImpl snapshot,
-      CaseInsensitiveStringMap options) {
+      CaseInsensitiveStringMap options,
+      CatalogTableManager catalogTableManager) {
     this.kernelScanBuilder = requireNonNull(snapshot, "snapshot is null").getScanBuilder();
     this.tablePath = requireNonNull(tablePath, "tablePath is null");
     this.dataSchema = requireNonNull(dataSchema, "dataSchema is null");
@@ -72,6 +76,7 @@ public class SparkScanBuilder
             .collect(Collectors.toSet());
     this.pushedKernelPredicates = new Predicate[0];
     this.dataFilters = new Filter[0];
+    this.catalogTableManager = catalogTableManager;
   }
 
   @Override
@@ -153,7 +158,8 @@ public class SparkScanBuilder
         pushedKernelPredicates,
         dataFilters,
         kernelScanBuilder.build(),
-        options);
+        options,
+        catalogTableManager);
   }
 
   CaseInsensitiveStringMap getOptions() {
