@@ -1,0 +1,20 @@
+package io.delta.kernel.spark.catalog.utils;
+
+import io.delta.kernel.Snapshot;
+import io.delta.kernel.internal.DeltaHistoryManager;
+import org.apache.spark.sql.AnalysisException;
+
+import java.sql.Timestamp;
+
+public interface DeltaTableManager {
+
+    Snapshot unsafeVolatileSnapshot();
+
+    Snapshot update();
+
+    // Some methods that streaming requires
+    DeltaHistoryManager.Commit getActiveCommitAtTime(Timestamp timeStamp,  Boolean canReturnLastCommit,
+                                                     Boolean mustBeRecreatable, Boolean canReturnEarliestCommit);
+    void checkVersionExists(Long version, Boolean mustBeRecreatable, Boolean allowOutOfRange) throws AnalysisException;
+
+}
