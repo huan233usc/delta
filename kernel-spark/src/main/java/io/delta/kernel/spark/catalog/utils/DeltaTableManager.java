@@ -12,6 +12,7 @@ public interface DeltaTableManager {
 
     Snapshot update();
 
+    // Some methods that streaming requires
     DeltaHistoryManager.Commit getActiveCommitAtTime(Timestamp timeStamp,  Boolean canReturnLastCommit,
                                                      Boolean mustBeRecreatable, Boolean canReturnEarliestCommit);
     void checkVersionExists(Long version, Boolean mustBeRecreatable, Boolean allowOutOfRange) throws AnalysisException;
