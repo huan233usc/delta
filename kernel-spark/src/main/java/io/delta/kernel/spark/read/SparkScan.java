@@ -21,7 +21,7 @@ import io.delta.kernel.defaults.engine.DefaultEngine;
 import io.delta.kernel.engine.Engine;
 import io.delta.kernel.expressions.Predicate;
 import io.delta.kernel.internal.actions.AddFile;
-import io.delta.kernel.spark.catalog.utils.DeltaTableManager;
+import io.delta.kernel.TableManager;
 import io.delta.kernel.spark.utils.ScalaUtils;
 import io.delta.kernel.utils.CloseableIterator;
 import java.io.IOException;
@@ -62,7 +62,7 @@ public class SparkScan implements Scan, SupportsReportStatistics {
   private final List<PartitionedFile> partitionedFiles = new ArrayList<>();
   private long totalBytes = 0L;
   private volatile boolean planned = false;
-  private final DeltaTableManager deltaTableManager;
+  private final TableManager deltaTableManager;
 
   public SparkScan(
       String tablePath,
@@ -73,7 +73,7 @@ public class SparkScan implements Scan, SupportsReportStatistics {
       Filter[] dataFilters,
       io.delta.kernel.Scan kernelScan,
       CaseInsensitiveStringMap options,
-      DeltaTableManager deltaTableManager) {
+      TableManager deltaTableManager) {
 
     final String normalizedTablePath = Objects.requireNonNull(tablePath, "tablePath is null");
     this.tablePath =

@@ -20,7 +20,7 @@ import static java.util.Objects.requireNonNull;
 import io.delta.kernel.expressions.And;
 import io.delta.kernel.expressions.Predicate;
 import io.delta.kernel.internal.SnapshotImpl;
-import io.delta.kernel.spark.catalog.utils.DeltaTableManager;
+import io.delta.kernel.TableManager;
 import io.delta.kernel.spark.utils.ExpressionUtils;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -54,7 +54,7 @@ public class SparkScanBuilder
   private Filter[] pushedSparkFilters;
   private Filter[] dataFilters;
 
-  private final DeltaTableManager catalogTableManager;
+  private final TableManager catalogTableManager;
 
   public SparkScanBuilder(
       String tableName,
@@ -63,7 +63,7 @@ public class SparkScanBuilder
       StructType partitionSchema,
       SnapshotImpl snapshot,
       CaseInsensitiveStringMap options,
-      DeltaTableManager catalogTableManager) {
+      TableManager catalogTableManager) {
     this.kernelScanBuilder = requireNonNull(snapshot, "snapshot is null").getScanBuilder();
     this.tablePath = requireNonNull(tablePath, "tablePath is null");
     this.dataSchema = requireNonNull(dataSchema, "dataSchema is null");

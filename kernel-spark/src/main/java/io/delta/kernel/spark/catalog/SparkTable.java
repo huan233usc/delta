@@ -19,7 +19,7 @@ import static io.delta.kernel.spark.utils.ScalaUtils.toScalaMap;
 import static java.util.Objects.requireNonNull;
 
 import io.delta.kernel.internal.SnapshotImpl;
-import io.delta.kernel.spark.catalog.utils.DeltaTableManager;
+import io.delta.kernel.TableManager;
 import io.delta.kernel.spark.catalog.utils.DeltaTableManagerFactory;
 import io.delta.kernel.spark.catalog.utils.PathBasedTableManager;
 import io.delta.kernel.spark.read.SparkScanBuilder;
@@ -56,7 +56,7 @@ public class SparkTable implements Table, SupportsRead, AutoCloseable {
   private final StructType partitionSchema;
   private final Column[] columns;
   private final Transform[] partitionTransforms;
-  private final DeltaTableManager catalogTableManager;
+  private final TableManager catalogTableManager;
   private final Optional<CatalogTable> catalogTable;
 
   public SparkTable(Identifier identifier, CatalogTable catalogTable, Map<String, String> options) {
@@ -234,7 +234,7 @@ public class SparkTable implements Table, SupportsRead, AutoCloseable {
 
   /**
    * Clean up resources when the SparkTable is no longer needed. This will close the underlying
-   * DeltaTableManager and free any held resources.
+   * TableManager and free any held resources.
    */
   @Override
   public void close() {
@@ -247,9 +247,9 @@ public class SparkTable implements Table, SupportsRead, AutoCloseable {
    * Get the underlying table manager for advanced operations. This is mainly for internal use and
    * debugging.
    *
-   * @return the DeltaTableManager instance
+   * @return the TableManager instance
    */
-  public DeltaTableManager getTableManager() {
+  public TableManager getTableManager() {
     return catalogTableManager;
   }
 }

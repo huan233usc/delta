@@ -13,7 +13,9 @@ import java.util.concurrent.atomic.AtomicReference;
  * duplication between implementations. Enhanced to support lifecycle management as specified in the
  * design document.
  */
-public abstract class AbstractDeltaTableManager implements DeltaTableManager {
+import io.delta.kernel.TableManager;
+
+public abstract class AbstractDeltaTableManager implements TableManager {
 
   protected String tablePath;
   protected Map<String, String> properties;

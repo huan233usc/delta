@@ -10,8 +10,10 @@ import org.apache.spark.sql.catalyst.catalog.CatalogTable;
 import org.apache.spark.util.Utils;
 import scala.collection.JavaConverters;
 
+import io.delta.kernel.TableManager;
+
 /**
- * Factory for creating DeltaTableManager instances. Enhanced version supporting dynamic class
+ * Factory for creating TableManager instances. Enhanced version supporting dynamic class
  * loading and custom implementations, following Iceberg's proven factory pattern.
  */
 public class DeltaTableManagerFactory {
@@ -30,13 +32,13 @@ public class DeltaTableManagerFactory {
       "io.delta.kernel.spark.catalog.utils.PathBasedTableManager";
 
   /**
-   * Creates the appropriate DeltaTableManager based on the catalog table configuration. This is the
+   * Creates the appropriate TableManager based on the catalog table configuration. This is the
    * main entry point for compatibility with existing code.
    *
    * @param catalogTable the catalog table to create a manager for
    * @return UnityCatalogTableManager for Unity Catalog tables, PathBasedTableManager otherwise
    */
-  public static DeltaTableManager create(CatalogTable catalogTable) {
+  public static TableManager create(CatalogTable catalogTable) {
     Map<String, String> properties = extractPropertiesFromCatalogTable(catalogTable);
 
     // Check for custom implementation first
@@ -102,37 +104,37 @@ public class DeltaTableManagerFactory {
       case PATH_TYPE:
         return PATH_IMPL;
       default:
-        throw new UnsupportedOperationException(
-            "Unknown table manager type: "
-                + managerType
-                + ". Supported types: unity, path. "
-                + "For custom implementations, use "
-                + DELTA_TABLE_MANAGER_IMPL
-                + " property.");
-    }
-  }
+          throw new UnsupportedOperationException(
+              "Unknown table manager type: "
+                  + managerType
+                  + ". Supported types: unity, path. "
+                  + "For custom implementations, use "
+                  + DELTA_TABLE_MANAGER_IMPL
+                  + " property.");
+        }
+      }
 
-  /**
-   * Load table manager using dynamic class loading. Supports both built-in implementations and
-   * custom ones.
-   */
-  public static DeltaTableManager loadTableManager(
-      String impl, CatalogTable catalogTable, Map<String, String> properties) {
+      /**
+       * Load table manager using dynamic class loading. Supports both built-in implementations and
+       * custom ones.
+       */
+      public static TableManager loadTableManager(
+          String impl, CatalogTable catalogTable, Map<String, String> properties) {
 
-    if (impl == null) {
-      throw new IllegalArgumentException(
-          "Cannot initialize DeltaTableManager, impl class name is null");
-    }
+        if (impl == null) {
+          throw new IllegalArgumentException(
+              "Cannot initialize TableManager, impl class name is null");
+        }
 
     try {
       // Use Spark's Utils.classForName for consistent class loading
       Class<?> clazz = Utils.classForName(impl);
 
-      // Verify the class implements DeltaTableManager
-      if (!DeltaTableManager.class.isAssignableFrom(clazz)) {
+      // Verify the class implements TableManager
+      if (!TableManager.class.isAssignableFrom(clazz)) {
         throw new IllegalArgumentException(
             String.format(
-                "Cannot initialize DeltaTableManager, %s does not implement DeltaTableManager.",
+                "Cannot initialize TableManager, %s does not implement TableManager.",
                 impl));
       }
 
@@ -141,7 +143,7 @@ public class DeltaTableManagerFactory {
       ctor.setAccessible(true);
 
       // Create instance
-      DeltaTableManager manager = (DeltaTableManager) ctor.newInstance();
+      TableManager manager = (TableManager) ctor.newInstance();
 
       // Initialize with table and properties
       manager.initialize(catalogTable.location().toString(), properties);
@@ -149,14 +151,14 @@ public class DeltaTableManagerFactory {
 
     } catch (ClassNotFoundException e) {
       throw new IllegalArgumentException(
-          String.format("Cannot find DeltaTableManager implementation: %s", impl), e);
+          String.format("Cannot find TableManager implementation: %s", impl), e);
     } catch (NoSuchMethodException e) {
       throw new IllegalArgumentException(
-          String.format("DeltaTableManager implementation %s must have a no-arg constructor", impl),
+          String.format("TableManager implementation %s must have a no-arg constructor", impl),
           e);
     } catch (Exception e) {
       throw new RuntimeException(
-          String.format("Failed to initialize DeltaTableManager %s: %s", impl, e.getMessage()), e);
+          String.format("Failed to initialize TableManager %s: %s", impl, e.getMessage()), e);
     }
   }
 

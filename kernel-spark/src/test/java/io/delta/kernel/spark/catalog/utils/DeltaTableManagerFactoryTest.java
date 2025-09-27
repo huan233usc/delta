@@ -47,7 +47,7 @@ public class DeltaTableManagerFactoryTest {
     // logic
     // In real usage, this would work properly with Spark context
     try {
-      DeltaTableManager manager = DeltaTableManagerFactory.create(pathTable);
+        CatalogTableManager manager = DeltaTableManagerFactory.create(pathTable);
       // In a real environment with Spark context, this would succeed
     } catch (Exception e) {
       // Expected in test environment without Spark context
@@ -86,7 +86,7 @@ public class DeltaTableManagerFactoryTest {
     CatalogTable customTable = createMockCatalogTable("/custom/table", properties);
 
     try {
-      DeltaTableManager manager = DeltaTableManagerFactory.create(customTable);
+        CatalogTableManager manager = DeltaTableManagerFactory.create(customTable);
       // Would succeed with proper Spark context
     } catch (Exception e) {
       // Expected due to missing Spark context in test
@@ -117,7 +117,7 @@ public class DeltaTableManagerFactoryTest {
     CatalogTable explicitTable = createMockCatalogTable("/explicit/table", properties);
 
     try {
-      DeltaTableManager manager = DeltaTableManagerFactory.create(explicitTable);
+        CatalogTableManager manager = DeltaTableManagerFactory.create(explicitTable);
       // Would succeed with Spark context
     } catch (Exception e) {
       // Expected in test environment

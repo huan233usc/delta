@@ -17,33 +17,35 @@
 package io.delta.unity;
 
 import io.delta.kernel.Snapshot;
+import io.delta.kernel.TableManager;
 import io.delta.kernel.defaults.engine.DefaultEngine;
 import io.delta.kernel.engine.Engine;
 import io.delta.kernel.internal.DeltaHistoryManager;
 import io.delta.kernel.internal.SnapshotImpl;
 import io.delta.kernel.internal.files.ParsedDeltaData;
 import io.delta.kernel.internal.files.ParsedLogData;
-import io.delta.kernel.spark.catalog.utils.DeltaTableManager;
 import io.delta.storage.commit.GetCommitsResponse;
 import io.delta.storage.commit.uccommitcoordinator.UCClient;
 import io.delta.storage.commit.uccommitcoordinator.UCCommitCoordinatorClient;
 import io.delta.storage.commit.uccommitcoordinator.UCTokenBasedRestClient;
+import org.apache.hadoop.conf.Configuration;
+
 import java.sql.Timestamp;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.spark.sql.AnalysisException;
-import org.apache.spark.sql.SparkSession;
-import org.apache.spark.sql.delta.VersionNotFoundException;
 
 /**
- * Unity Catalog implementation of DeltaTableManager. Located in delta-unity module for clean
- * separation of UC-specific logic. Handles UC API → CCv2 protocol translation.
+ * Unity Catalog implementation of TableManager.
+ * Located in delta-unity module for clean separation of UC-specific logic.
+ * Handles UC API → CCv2 protocol translation.
+ * 
+ * This implementation does not depend on Spark directly - all necessary
+ * configuration is passed via properties.
  */
-public class UnityCatalogTableManager implements DeltaTableManager {
+public class UnityCatalogTableManager implements TableManager {
 
   /** Prefix for Spark SQL catalog configurations. */
   private static final String SPARK_SQL_CATALOG_PREFIX = "spark.sql.catalog.";
@@ -137,36 +139,44 @@ public class UnityCatalogTableManager implements DeltaTableManager {
 
   @Override
   public void checkVersionExists(Long version, Boolean mustBeRecreatable, Boolean allowOutOfRange)
-      throws AnalysisException {
+      throws TableManagerException {
 
-    // Get ratified commits to determine version bounds
-    SnapshotImpl snapshot = (SnapshotImpl) update();
-    GetCommitsResponse response =
-        ccv2Client.getRatifiedCommitsFromUC(
-            ucTableId, tablePath, Optional.of(snapshot.getVersion()));
+    try {
+      // Get ratified commits to determine version bounds
+      SnapshotImpl snapshot = (SnapshotImpl) update();
+      GetCommitsResponse response =
+          ccv2Client.getRatifiedCommitsFromUC(
+              ucTableId, tablePath, Optional.of(snapshot.getVersion()));
 
-    List<ParsedDeltaData> parsedDeltas =
-        UCCatalogManagedClient.getSortedKernelParsedDeltaDataFromRatifiedCommits(
-                ucTableId, response.getCommits())
-            .stream()
-            .filter(x -> x instanceof ParsedDeltaData && x.isFile())
-            .map(ParsedDeltaData.class::cast)
-            .collect(Collectors.toList());
+      List<ParsedDeltaData> parsedDeltas =
+          UCCatalogManagedClient.getSortedKernelParsedDeltaDataFromRatifiedCommits(
+                  ucTableId, response.getCommits())
+              .stream()
+              .filter(x -> x instanceof ParsedDeltaData && x.isFile())
+              .map(ParsedDeltaData.class::cast)
+              .collect(Collectors.toList());
 
-    Optional<Long> earliestRatifiedVersion =
-        parsedDeltas.stream().map(ParsedLogData::getVersion).min(Long::compare);
+      Optional<Long> earliestRatifiedVersion =
+          parsedDeltas.stream().map(ParsedLogData::getVersion).min(Long::compare);
 
-    long earliest =
-        mustBeRecreatable
-            ? DeltaHistoryManager.getEarliestRecreatableCommit(
-                kernelEngine, snapshot.getLogPath(), earliestRatifiedVersion)
-            : DeltaHistoryManager.getEarliestDeltaFile(
-                kernelEngine, snapshot.getLogPath(), earliestRatifiedVersion);
+      long earliest =
+          mustBeRecreatable
+              ? DeltaHistoryManager.getEarliestRecreatableCommit(
+                  kernelEngine, snapshot.getLogPath(), earliestRatifiedVersion)
+              : DeltaHistoryManager.getEarliestDeltaFile(
+                  kernelEngine, snapshot.getLogPath(), earliestRatifiedVersion);
 
-    long latest = snapshot.getVersion();
+      long latest = snapshot.getVersion();
 
-    if (version < earliest || ((version > latest) && !allowOutOfRange)) {
-      throw new VersionNotFoundException(version, earliest, latest);
+      if (version < earliest || ((version > latest) && !allowOutOfRange)) {
+        throw TableManagerException.versionNotFound(version);
+      }
+    } catch (Exception e) {
+      if (e instanceof TableManagerException) {
+        throw e;
+      }
+      throw new TableManagerException(
+          "Error checking version " + version + " for Unity Catalog table: " + e.getMessage(), e);
     }
   }
 
@@ -225,7 +235,8 @@ public class UnityCatalogTableManager implements DeltaTableManager {
 
     throw new IllegalArgumentException(
         "Cannot determine Unity Catalog name from properties. "
-            + "Please ensure 'catalog.name' property is set or Unity Catalog is properly configured.");
+            + "Please ensure 'catalog.name' property is set or Unity Catalog is "
+            + "properly configured.");
   }
 
   private UriAndToken extractUCCredentials(String catalogName, Map<String, String> properties) {
@@ -249,27 +260,28 @@ public class UnityCatalogTableManager implements DeltaTableManager {
   }
 
   private Engine createEngine(Map<String, String> properties) {
-    // Create Hadoop configuration from properties
-    Configuration hadoopConf = SparkSession.active().sessionState().newHadoopConf();
+    // Create Hadoop configuration from properties passed from Spark layer
+    Configuration hadoopConf = new Configuration();
+    
+    // Apply Hadoop configurations passed via properties
+    // The Spark layer should extract and pass relevant configs with "hadoop." prefix
+    properties.entrySet().stream()
+        .filter(entry -> entry.getKey().startsWith("hadoop."))
+        .forEach(entry -> hadoopConf.set(
+            entry.getKey().substring(7), // Remove "hadoop." prefix
+            entry.getValue()));
 
-    // Apply storage and Hadoop properties
+    // Apply other storage properties that may be relevant to Hadoop
     properties.entrySet().stream()
         .filter(
             entry ->
-                entry.getKey().startsWith("hadoop.")
-                    || (!entry.getKey().startsWith("spark.sql.catalog.")
-                        && !entry.getKey().startsWith("delta.")
-                        && !entry.getKey().equals("table.path")
-                        && !entry.getKey().equals("catalog.name")
-                        && !entry.getKey().equals(UCCommitCoordinatorClient.UC_TABLE_ID_KEY)))
-        .forEach(
-            entry -> {
-              String key =
-                  entry.getKey().startsWith("hadoop.")
-                      ? entry.getKey().substring(7) // Remove "hadoop." prefix
-                      : entry.getKey();
-              hadoopConf.set(key, entry.getValue());
-            });
+                !entry.getKey().startsWith("spark.sql.catalog.")
+                    && !entry.getKey().startsWith("delta.")
+                    && !entry.getKey().equals("table.path")
+                    && !entry.getKey().equals("catalog.name")
+                    && !entry.getKey().equals(UCCommitCoordinatorClient.UC_TABLE_ID_KEY)
+                    && !entry.getKey().startsWith("hadoop."))
+        .forEach(entry -> hadoopConf.set(entry.getKey(), entry.getValue()));
 
     return DefaultEngine.create(hadoopConf);
   }

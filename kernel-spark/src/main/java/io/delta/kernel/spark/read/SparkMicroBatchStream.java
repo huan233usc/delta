@@ -15,7 +15,7 @@
  */
 package io.delta.kernel.spark.read;
 
-import io.delta.kernel.spark.catalog.utils.DeltaTableManager;
+import io.delta.kernel.TableManager;
 import org.apache.spark.sql.connector.read.InputPartition;
 import org.apache.spark.sql.connector.read.PartitionReaderFactory;
 import org.apache.spark.sql.connector.read.streaming.MicroBatchStream;
@@ -23,7 +23,7 @@ import org.apache.spark.sql.connector.read.streaming.Offset;
 
 public class SparkMicroBatchStream implements MicroBatchStream {
 
-  private DeltaTableManager deltaTableManager;
+  private TableManager deltaTableManager;
 
   ////////////
   // offset //

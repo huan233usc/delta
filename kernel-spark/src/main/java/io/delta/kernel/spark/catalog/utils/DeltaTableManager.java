@@ -10,10 +10,16 @@ import org.apache.spark.sql.AnalysisException;
  * Unified interface for Delta table catalog operations. Mirrors Iceberg's Catalog interface pattern
  * with Delta-specific extensions.
  *
- * <p>Implementation Requirements: 1. Must have a no-arg constructor for dynamic loading 2. Must
- * call initialize() after construction 3. Should be thread-safe for concurrent snapshot access
+ * <p>This interface provides catalog-aware table management, which is different from the static
+ * factory methods in {@link io.delta.kernel.TableManager}. This interface manages the lifecycle
+ * and operations of specific catalog-managed tables.
+ *
+ * <p>Implementation Requirements: 
+ * 1. Must have a no-arg constructor for dynamic loading 
+ * 2. Must call initialize() after construction 
+ * 3. Should be thread-safe for concurrent snapshot access
  */
-public interface DeltaTableManager {
+public interface CatalogTableManager {
 
   // Core snapshot operations (preserved from existing interface)
   Snapshot unsafeVolatileSnapshot();
