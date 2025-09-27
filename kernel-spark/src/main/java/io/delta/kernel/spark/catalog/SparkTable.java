@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package io.delta.kernel.spark.table;
+package io.delta.kernel.spark.catalog;
 
 import static io.delta.kernel.spark.utils.ScalaUtils.toScalaMap;
 import static java.util.Objects.requireNonNull;
@@ -37,7 +37,7 @@ import org.apache.spark.sql.types.StructType;
 import org.apache.spark.sql.util.CaseInsensitiveStringMap;
 
 /** DataSource V2 Table implementation for Delta Lake using the Delta Kernel API. */
-public class SparkTable implements Table, SupportsRead {
+public class SparkTable implements Table, SupportsRead, AutoCloseable {
 
   private static final Set<TableCapability> CAPABILITIES =
       Collections.unmodifiableSet(
@@ -229,5 +229,26 @@ public class SparkTable implements Table, SupportsRead {
   @Override
   public String toString() {
     return "SparkTable{identifier=" + identifier + '}';
+  }
+
+  /**
+   * Clean up resources when the SparkTable is no longer needed.
+   * This will close the underlying DeltaTableManager and free any held resources.
+   */
+  @Override
+  public void close() {
+    if (catalogTableManager != null) {
+      catalogTableManager.close();
+    }
+  }
+
+  /**
+   * Get the underlying table manager for advanced operations.
+   * This is mainly for internal use and debugging.
+   * 
+   * @return the DeltaTableManager instance
+   */
+  public DeltaTableManager getTableManager() {
+    return catalogTableManager;
   }
 }
