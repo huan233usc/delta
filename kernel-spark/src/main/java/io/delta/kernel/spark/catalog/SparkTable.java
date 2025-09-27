@@ -64,13 +64,13 @@ public class SparkTable implements Table, SupportsRead, AutoCloseable {
     this.tablePath = requireNonNull(catalogTable.location().toString(), "snapshot is null");
     this.options = options;
     this.hadoopConf =
-            SparkSession.active().sessionState().newHadoopConfWithOptions(toScalaMap(options));
+        SparkSession.active().sessionState().newHadoopConfWithOptions(toScalaMap(options));
     this.catalogTableManager = DeltaTableManagerFactory.create(catalogTable);
     this.snapshot = (SnapshotImpl) catalogTableManager.unsafeVolatileSnapshot();
 
     this.schema = SchemaUtils.convertKernelSchemaToSparkSchema(snapshot.getSchema());
     this.partColNames =
-            Collections.unmodifiableList(new ArrayList<>(snapshot.getPartitionColumnNames()));
+        Collections.unmodifiableList(new ArrayList<>(snapshot.getPartitionColumnNames()));
 
     final List<StructField> dataFields = new ArrayList<>();
     final List<StructField> partitionFields = new ArrayList<>();
@@ -104,7 +104,7 @@ public class SparkTable implements Table, SupportsRead, AutoCloseable {
 
     this.columns = CatalogV2Util.structTypeToV2Columns(schema);
     this.partitionTransforms =
-            partColNames.stream().map(Expressions::identity).toArray(Transform[]::new);
+        partColNames.stream().map(Expressions::identity).toArray(Transform[]::new);
     this.catalogTable = Optional.of(catalogTable);
   }
 
@@ -223,7 +223,8 @@ public class SparkTable implements Table, SupportsRead, AutoCloseable {
     Map<String, String> combined = new HashMap<>(this.options);
     combined.putAll(scanOptions.asCaseSensitiveMap());
     CaseInsensitiveStringMap merged = new CaseInsensitiveStringMap(combined);
-    return new SparkScanBuilder(name(), tablePath, dataSchema, partitionSchema, snapshot, merged, catalogTableManager);
+    return new SparkScanBuilder(
+        name(), tablePath, dataSchema, partitionSchema, snapshot, merged, catalogTableManager);
   }
 
   @Override
@@ -232,8 +233,8 @@ public class SparkTable implements Table, SupportsRead, AutoCloseable {
   }
 
   /**
-   * Clean up resources when the SparkTable is no longer needed.
-   * This will close the underlying DeltaTableManager and free any held resources.
+   * Clean up resources when the SparkTable is no longer needed. This will close the underlying
+   * DeltaTableManager and free any held resources.
    */
   @Override
   public void close() {
@@ -243,9 +244,9 @@ public class SparkTable implements Table, SupportsRead, AutoCloseable {
   }
 
   /**
-   * Get the underlying table manager for advanced operations.
-   * This is mainly for internal use and debugging.
-   * 
+   * Get the underlying table manager for advanced operations. This is mainly for internal use and
+   * debugging.
+   *
    * @return the DeltaTableManager instance
    */
   public DeltaTableManager getTableManager() {
