@@ -17,10 +17,10 @@ package io.delta.kernel.spark.read;
 
 import static java.util.Objects.requireNonNull;
 
+import io.delta.kernel.TableManager;
 import io.delta.kernel.expressions.And;
 import io.delta.kernel.expressions.Predicate;
 import io.delta.kernel.internal.SnapshotImpl;
-import io.delta.kernel.TableManager;
 import io.delta.kernel.spark.utils.ExpressionUtils;
 import java.util.*;
 import java.util.stream.Collectors;

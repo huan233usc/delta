@@ -2,7 +2,7 @@
 ## Create a table with Hudi UniForm enabled
 Using spark-sql you can create a table and insert a few records into it. You will need to include the delta-hudi-assembly jar on the path.
 ```
-spark-sql --packages io.delta:delta-spark_2.12:3.2.0-SNAPSHOT --jars delta-hudi-assembly_2.12-3.2.0-SNAPSHOT.jar --conf "spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension" --conf "spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog"
+spark-sql --packages io.delta:delta-spark_2.12:3.4.0-SNAPSHOT --jars delta-hudi-assembly_2.12-3.4.0-SNAPSHOT.jar --conf "spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension" --conf "spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog"
 ```
 Then you can create a table with Hudi UniForm enabled.
 ```

@@ -18,8 +18,8 @@ package io.delta.kernel.spark.catalog;
 import static io.delta.kernel.spark.utils.ScalaUtils.toScalaMap;
 import static java.util.Objects.requireNonNull;
 
-import io.delta.kernel.internal.SnapshotImpl;
 import io.delta.kernel.TableManager;
+import io.delta.kernel.internal.SnapshotImpl;
 import io.delta.kernel.spark.catalog.utils.DeltaTableManagerFactory;
 import io.delta.kernel.spark.catalog.utils.PathBasedTableManager;
 import io.delta.kernel.spark.read.SparkScanBuilder;

@@ -753,7 +753,7 @@ lazy val kernelSpark = (project in file("kernel-spark"))
 lazy val unity = (project in file("unity"))
   .enablePlugins(ScalafmtPlugin)
   .dependsOn(kernelApi % "compile->compile;test->test")
-  .dependsOn(kernelDefaults % "test->test")
+  .dependsOn(kernelDefaults % "compile->compile;test->test")
   .dependsOn(storage)
   .settings (
     name := "delta-unity",

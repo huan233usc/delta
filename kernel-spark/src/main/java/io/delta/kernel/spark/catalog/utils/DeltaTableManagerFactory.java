@@ -1,5 +1,6 @@
 package io.delta.kernel.spark.catalog.utils;
 
+import io.delta.kernel.TableManager;
 import io.delta.kernel.internal.tablefeatures.TableFeatures;
 import io.delta.storage.commit.uccommitcoordinator.UCCommitCoordinatorClient;
 import java.lang.reflect.Constructor;
@@ -7,14 +8,11 @@ import java.util.HashMap;
 import java.util.Map;
 import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.catalyst.catalog.CatalogTable;
-import org.apache.spark.util.Utils;
 import scala.collection.JavaConverters;
 
-import io.delta.kernel.TableManager;
-
 /**
- * Factory for creating TableManager instances. Enhanced version supporting dynamic class
- * loading and custom implementations, following Iceberg's proven factory pattern.
+ * Factory for creating TableManager instances. Enhanced version supporting dynamic class loading
+ * and custom implementations, following Iceberg's proven factory pattern.
  */
 public class DeltaTableManagerFactory {
 
@@ -32,8 +30,8 @@ public class DeltaTableManagerFactory {
       "io.delta.kernel.spark.catalog.utils.PathBasedTableManager";
 
   /**
-   * Creates the appropriate TableManager based on the catalog table configuration. This is the
-   * main entry point for compatibility with existing code.
+   * Creates the appropriate TableManager based on the catalog table configuration. This is the main
+   * entry point for compatibility with existing code.
    *
    * @param catalogTable the catalog table to create a manager for
    * @return UnityCatalogTableManager for Unity Catalog tables, PathBasedTableManager otherwise
@@ -104,38 +102,36 @@ public class DeltaTableManagerFactory {
       case PATH_TYPE:
         return PATH_IMPL;
       default:
-          throw new UnsupportedOperationException(
-              "Unknown table manager type: "
-                  + managerType
-                  + ". Supported types: unity, path. "
-                  + "For custom implementations, use "
-                  + DELTA_TABLE_MANAGER_IMPL
-                  + " property.");
-        }
-      }
+        throw new UnsupportedOperationException(
+            "Unknown table manager type: "
+                + managerType
+                + ". Supported types: unity, path. "
+                + "For custom implementations, use "
+                + DELTA_TABLE_MANAGER_IMPL
+                + " property.");
+    }
+  }
 
-      /**
-       * Load table manager using dynamic class loading. Supports both built-in implementations and
-       * custom ones.
-       */
-      public static TableManager loadTableManager(
-          String impl, CatalogTable catalogTable, Map<String, String> properties) {
+  /**
+   * Load table manager using dynamic class loading. Supports both built-in implementations and
+   * custom ones.
+   */
+  public static TableManager loadTableManager(
+      String impl, CatalogTable catalogTable, Map<String, String> properties) {
 
-        if (impl == null) {
-          throw new IllegalArgumentException(
-              "Cannot initialize TableManager, impl class name is null");
-        }
+    if (impl == null) {
+      throw new IllegalArgumentException("Cannot initialize TableManager, impl class name is null");
+    }
 
     try {
-      // Use Spark's Utils.classForName for consistent class loading
-      Class<?> clazz = Utils.classForName(impl);
+      // Use standard Class.forName for consistent class loading
+      Class<?> clazz = Class.forName(impl);
 
       // Verify the class implements TableManager
       if (!TableManager.class.isAssignableFrom(clazz)) {
         throw new IllegalArgumentException(
             String.format(
-                "Cannot initialize TableManager, %s does not implement TableManager.",
-                impl));
+                "Cannot initialize TableManager, %s does not implement TableManager.", impl));
       }
 
       // Get no-arg constructor
@@ -154,8 +150,7 @@ public class DeltaTableManagerFactory {
           String.format("Cannot find TableManager implementation: %s", impl), e);
     } catch (NoSuchMethodException e) {
       throw new IllegalArgumentException(
-          String.format("TableManager implementation %s must have a no-arg constructor", impl),
-          e);
+          String.format("TableManager implementation %s must have a no-arg constructor", impl), e);
     } catch (Exception e) {
       throw new RuntimeException(
           String.format("Failed to initialize TableManager %s: %s", impl, e.getMessage()), e);

@@ -25,6 +25,14 @@ public class SparkMicroBatchStream implements MicroBatchStream {
 
   private TableManager deltaTableManager;
 
+  // Default constructor for existing tests
+  public SparkMicroBatchStream() {}
+
+  // Constructor for use with TableManager
+  public SparkMicroBatchStream(TableManager deltaTableManager) {
+    this.deltaTableManager = deltaTableManager;
+  }
+
   ////////////
   // offset //
   ////////////

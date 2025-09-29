@@ -28,22 +28,20 @@ import io.delta.storage.commit.GetCommitsResponse;
 import io.delta.storage.commit.uccommitcoordinator.UCClient;
 import io.delta.storage.commit.uccommitcoordinator.UCCommitCoordinatorClient;
 import io.delta.storage.commit.uccommitcoordinator.UCTokenBasedRestClient;
-import org.apache.hadoop.conf.Configuration;
-
 import java.sql.Timestamp;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
+import org.apache.hadoop.conf.Configuration;
 
 /**
- * Unity Catalog implementation of TableManager.
- * Located in delta-unity module for clean separation of UC-specific logic.
- * Handles UC API → CCv2 protocol translation.
- * 
- * This implementation does not depend on Spark directly - all necessary
- * configuration is passed via properties.
+ * Unity Catalog implementation of TableManager. Located in delta-unity module for clean separation
+ * of UC-specific logic. Handles UC API → CCv2 protocol translation.
+ *
+ * <p>This implementation does not depend on Spark directly - all necessary configuration is passed
+ * via properties.
  */
 public class UnityCatalogTableManager implements TableManager {
 
@@ -262,14 +260,16 @@ public class UnityCatalogTableManager implements TableManager {
   private Engine createEngine(Map<String, String> properties) {
     // Create Hadoop configuration from properties passed from Spark layer
     Configuration hadoopConf = new Configuration();
-    
+
     // Apply Hadoop configurations passed via properties
     // The Spark layer should extract and pass relevant configs with "hadoop." prefix
     properties.entrySet().stream()
         .filter(entry -> entry.getKey().startsWith("hadoop."))
-        .forEach(entry -> hadoopConf.set(
-            entry.getKey().substring(7), // Remove "hadoop." prefix
-            entry.getValue()));
+        .forEach(
+            entry ->
+                hadoopConf.set(
+                    entry.getKey().substring(7), // Remove "hadoop." prefix
+                    entry.getValue()));
 
     // Apply other storage properties that may be relevant to Hadoop
     properties.entrySet().stream()

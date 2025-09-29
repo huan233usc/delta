@@ -22,19 +22,17 @@ import io.delta.kernel.defaults.engine.DefaultEngine;
 import io.delta.kernel.engine.Engine;
 import io.delta.kernel.internal.DeltaHistoryManager;
 import io.delta.kernel.internal.SnapshotImpl;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.spark.sql.SparkSession;
-
 import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.spark.sql.SparkSession;
 
 /**
- * Path-based implementation for filesystem-only tables.
- * Located in delta-kernel-spark module as it only uses core kernel functionality.
- * No catalog involved, direct Delta log access.
+ * Path-based implementation for filesystem-only tables. Located in delta-kernel-spark module as it
+ * only uses core kernel functionality. No catalog involved, direct Delta log access.
  */
 public class PathBasedTableManager implements TableManager {
 
@@ -72,16 +70,20 @@ public class PathBasedTableManager implements TableManager {
     // Apply configuration properties passed via properties
     properties.entrySet().stream()
         .filter(entry -> entry.getKey().startsWith("hadoop."))
-        .forEach(entry -> hadoopConf.set(
-            entry.getKey().substring(7), // Remove "hadoop." prefix
-            entry.getValue()));
+        .forEach(
+            entry ->
+                hadoopConf.set(
+                    entry.getKey().substring(7), // Remove "hadoop." prefix
+                    entry.getValue()));
 
     // Apply other storage properties that may be relevant to Hadoop
     properties.entrySet().stream()
-        .filter(entry -> !entry.getKey().startsWith("spark.")
-            && !entry.getKey().startsWith("delta.")
-            && !entry.getKey().equals("table.path")
-            && !entry.getKey().startsWith("hadoop."))
+        .filter(
+            entry ->
+                !entry.getKey().startsWith("spark.")
+                    && !entry.getKey().startsWith("delta.")
+                    && !entry.getKey().equals("table.path")
+                    && !entry.getKey().startsWith("hadoop."))
         .forEach(entry -> hadoopConf.set(entry.getKey(), entry.getValue()));
 
     this.kernelEngine = DefaultEngine.create(hadoopConf);
@@ -96,7 +98,8 @@ public class PathBasedTableManager implements TableManager {
   @Override
   public Snapshot update() {
     if (tablePath == null) {
-      throw new IllegalStateException("PathBasedTableManager is not initialized. Call initialize() first.");
+      throw new IllegalStateException(
+          "PathBasedTableManager is not initialized. Call initialize() first.");
     }
 
     Snapshot snapshot = TableManager.loadSnapshot(tablePath).build(kernelEngine);
@@ -112,7 +115,8 @@ public class PathBasedTableManager implements TableManager {
       Boolean canReturnEarliestCommit) {
 
     if (tablePath == null) {
-      throw new IllegalStateException("PathBasedTableManager is not initialized. Call initialize() first.");
+      throw new IllegalStateException(
+          "PathBasedTableManager is not initialized. Call initialize() first.");
     }
 
     // Direct filesystem access to Delta log
@@ -126,7 +130,7 @@ public class PathBasedTableManager implements TableManager {
         canReturnLastCommit,
         canReturnEarliestCommit,
         new ArrayList<>() // No ratified commits for path-based
-    );
+        );
   }
 
   @Override
@@ -134,17 +138,19 @@ public class PathBasedTableManager implements TableManager {
       throws TableManagerException {
 
     if (tablePath == null) {
-      throw new IllegalStateException("PathBasedTableManager is not initialized. Call initialize() first.");
+      throw new IllegalStateException(
+          "PathBasedTableManager is not initialized. Call initialize() first.");
     }
 
     try {
       SnapshotImpl snapshot = (SnapshotImpl) update();
 
-      long earliest = mustBeRecreatable
-          ? DeltaHistoryManager.getEarliestRecreatableCommit(
-              kernelEngine, snapshot.getLogPath(), Optional.empty())
-          : DeltaHistoryManager.getEarliestDeltaFile(
-              kernelEngine, snapshot.getLogPath(), Optional.empty());
+      long earliest =
+          mustBeRecreatable
+              ? DeltaHistoryManager.getEarliestRecreatableCommit(
+                  kernelEngine, snapshot.getLogPath(), Optional.empty())
+              : DeltaHistoryManager.getEarliestDeltaFile(
+                  kernelEngine, snapshot.getLogPath(), Optional.empty());
 
       long latest = snapshot.getVersion();
 
