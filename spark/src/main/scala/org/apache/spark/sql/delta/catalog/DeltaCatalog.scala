@@ -24,7 +24,6 @@ import java.util.Locale
 import scala.collection.JavaConverters._
 import scala.collection.immutable.ListMap
 import scala.collection.mutable
-
 import org.apache.spark.sql.delta.skipping.clustering.ClusteredTableUtils
 import org.apache.spark.sql.delta.skipping.clustering.temp.{ClusterBy, ClusterBySpec}
 import org.apache.spark.sql.delta.skipping.clustering.temp.{ClusterByTransform => TempClusterByTransform}
@@ -37,14 +36,13 @@ import org.apache.spark.sql.delta.logging.DeltaLogKeys
 import org.apache.spark.sql.delta.metering.DeltaLogging
 import org.apache.spark.sql.delta.redirect.RedirectFeature
 import org.apache.spark.sql.delta.schema.SchemaUtils
-import org.apache.spark.sql.delta.sources.{DeltaDataSource, DeltaSourceUtils, DeltaSQLConf}
+import org.apache.spark.sql.delta.sources.{DeltaDataSource, DeltaSQLConf, DeltaSourceUtils}
 import org.apache.spark.sql.delta.stats.StatisticsCollection
 import org.apache.spark.sql.delta.tablefeatures.DropFeature
 import org.apache.spark.sql.delta.util.{Utils => DeltaUtils}
 import org.apache.spark.sql.delta.util.PartitionUtils
 import org.apache.spark.sql.util.ScalaExtensions._
 import org.apache.hadoop.fs.Path
-
 import org.apache.spark.SparkException
 import org.apache.spark.internal.{Logging, MDC}
 import org.apache.spark.sql.{AnalysisException, DataFrame, SparkSession}
@@ -52,7 +50,7 @@ import org.apache.spark.sql.catalyst.TableIdentifier
 import org.apache.spark.sql.catalyst.analysis.{NoSuchDatabaseException, NoSuchNamespaceException, NoSuchTableException, UnresolvedAttribute, UnresolvedFieldName, UnresolvedFieldPosition}
 import org.apache.spark.sql.catalyst.catalog.{BucketSpec, CatalogTable, CatalogTableType, CatalogUtils, SessionCatalog}
 import org.apache.spark.sql.catalyst.plans.logical.{LogicalPlan, QualifiedColType, SyncIdentity}
-import org.apache.spark.sql.connector.catalog.{DelegatingCatalogExtension, Identifier, StagedTable, StagingTableCatalog, SupportsWrite, Table, TableCapability, TableCatalog, TableChange, V1Table}
+import org.apache.spark.sql.connector.catalog.{CatalogPlugin, DelegatingCatalogExtension, Identifier, StagedTable, StagingTableCatalog, SupportsWrite, Table, TableCapability, TableCatalog, TableChange, V1Table}
 import org.apache.spark.sql.connector.catalog.TableCapability._
 import org.apache.spark.sql.connector.catalog.TableChange._
 import org.apache.spark.sql.connector.expressions.{FieldReference, IdentityTransform, Literal, NamedReference, Transform}
@@ -61,6 +59,7 @@ import org.apache.spark.sql.execution.datasources.{DataSource, PartitioningUtils
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.sources.InsertableRelation
 import org.apache.spark.sql.types.{IntegerType, StructField, StructType}
+import org.apache.spark.util.Utils
 
 
 /**
@@ -72,13 +71,51 @@ class DeltaCatalog extends DelegatingCatalogExtension
   with SupportsPathIdentifier
   with DeltaLogging {
 
-
   val spark = SparkSession.active
+
+  protected lazy val v2ConnectorCatalog: Option[DelegatingCatalogExtension] = {
+    try {
+      val v2Connector = Utils.classForName("io.delta.kernel.spark.catalog.SparkCatalog")
+        .getDeclaredConstructor().newInstance().asInstanceOf[DelegatingCatalogExtension]
+      logInfo("Successfully loaded io.delta.kernel.spark.catalog.SparkCatalog")
+      Some(v2Connector)
+    } catch {
+      case _: ClassNotFoundException =>
+        logDebug("io.delta.kernel.spark.catalog.SparkCatalog not found in classpath")
+        None
+    }
+  }
+
 
   private lazy val isUnityCatalog: Boolean = {
     val delegateField = classOf[DelegatingCatalogExtension].getDeclaredField("delegate")
     delegateField.setAccessible(true)
     delegateField.get(this).getClass.getCanonicalName.startsWith("io.unitycatalog.")
+  }
+
+  // Track the current delegate to detect changes
+  private var currentDelegate: CatalogPlugin = _
+  /**
+   * Sets up the delegation chain with v2ConnectorCatalog when delegate changes.
+   * This ensures that v2ConnectorCatalog is inserted between DeltaCatalog and the original
+   * delegate. Only re-initializes when the delegate actually changes.
+   *
+   * Note: This method should only be called when v2ConnectorCatalog.isDefined is true.
+   */
+  protected def ensureDelegationChain(): Unit = {
+    val delegateField = classOf[DelegatingCatalogExtension].getDeclaredField("delegate")
+    delegateField.setAccessible(true)
+    val actualDelegate = delegateField.get(this).asInstanceOf[CatalogPlugin]
+
+    // Only reinitialize if delegate has changed or this is the first time
+    if (currentDelegate != actualDelegate) {
+      currentDelegate = actualDelegate
+      // v2ConnectorCatalog is guaranteed to be defined when this method is called
+      val v2Connector = v2ConnectorCatalog.get
+      // Set up the chain: DeltaCatalog -> v2Connector -> actualDelegate
+      v2Connector.setDelegateCatalog(actualDelegate)
+      delegateField.set(this, v2Connector)
+    }
   }
 
   /**
@@ -228,6 +265,11 @@ class DeltaCatalog extends DelegatingCatalogExtension
 
   override def loadTable(ident: Identifier): Table = recordFrameProfile(
       "DeltaCatalog", "loadTable") {
+    // Only check delegation chain if v2ConnectorCatalog is available
+    if (v2ConnectorCatalog.isDefined) {
+      ensureDelegationChain()
+    }
+
     try {
       super.loadTable(ident) match {
         case v1: V1Table if DeltaTableUtils.isDeltaTable(v1.catalogTable) =>
@@ -241,13 +283,13 @@ class DeltaCatalog extends DelegatingCatalogExtension
     } catch {
       case e @ (
         _: NoSuchDatabaseException | _: NoSuchNamespaceException | _: NoSuchTableException) =>
-          if (isPathIdentifier(ident)) {
-            newDeltaPathTable(ident)
-          } else if (isIcebergPathIdentifier(ident)) {
-            newIcebergPathTable(ident)
-          } else {
-            throw e
-          }
+        if (isPathIdentifier(ident)) {
+          newDeltaPathTable(ident)
+        } else if (isIcebergPathIdentifier(ident)) {
+          newIcebergPathTable(ident)
+        } else {
+          throw e
+        }
       case e: AnalysisException if gluePermissionError(e) && isPathIdentifier(ident) =>
         logWarning(log"Received an access denied error from Glue. Assuming this " +
           log"identifier (${MDC(DeltaLogKeys.TABLE_NAME, ident)}) is path based.", e)
@@ -350,6 +392,11 @@ class DeltaCatalog extends DelegatingCatalogExtension
       partitions: Array[Transform],
       properties: util.Map[String, String]) : Table =
     recordFrameProfile("DeltaCatalog", "createTable") {
+      // Only check delegation chain if v2ConnectorCatalog is available
+      if (v2ConnectorCatalog.isDefined) {
+        ensureDelegationChain()
+      }
+
       if (DeltaSourceUtils.isDeltaDataSourceName(getProvider(properties))) {
         // TODO: we should extract write options from table properties for all the cases. We
         //       can remove the UC check when we have confidence.
@@ -646,6 +693,11 @@ class DeltaCatalog extends DelegatingCatalogExtension
 
   override def alterTable(ident: Identifier, changes: TableChange*): Table = recordFrameProfile(
       "DeltaCatalog", "alterTable") {
+    // Only check delegation chain if v2ConnectorCatalog is available
+    if (v2ConnectorCatalog.isDefined) {
+      ensureDelegationChain()
+    }
+
     // We group the table changes by their type, since Delta applies each in a separate action.
     // We also must define an artificial type for SetLocation, since data source V2 considers
     // location just another property but it's special in catalog tables.
@@ -974,6 +1026,11 @@ trait SupportsPathIdentifier extends TableCatalog { self: DeltaCatalog =>
 
   override def tableExists(ident: Identifier): Boolean = recordFrameProfile(
       "DeltaCatalog", "tableExists") {
+    // Only check delegation chain if v2ConnectorCatalog is available
+    if (v2ConnectorCatalog.isDefined) {
+      ensureDelegationChain()
+    }
+
     if (isPathIdentifier(ident)) {
       val path = new Path(ident.name())
       // scalastyle:off deltahadoopconfiguration
