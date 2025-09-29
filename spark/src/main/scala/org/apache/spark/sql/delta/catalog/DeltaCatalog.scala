@@ -77,11 +77,11 @@ class DeltaCatalog extends DelegatingCatalogExtension
     try {
       val v2Connector = Utils.classForName("io.delta.kernel.spark.catalog.SparkCatalog")
         .getDeclaredConstructor().newInstance().asInstanceOf[DelegatingCatalogExtension]
-      logInfo("Successfully loaded io.delta.kernel.spark.catalog.SparkCatalog")
+      logWarning("Successfully loaded io.delta.kernel.spark.catalog.SparkCatalog")
       Some(v2Connector)
     } catch {
       case _: ClassNotFoundException =>
-        logDebug("io.delta.kernel.spark.catalog.SparkCatalog not found in classpath")
+        logWarning("io.delta.kernel.spark.catalog.SparkCatalog not found in classpath")
         None
     }
   }

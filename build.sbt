@@ -728,7 +728,7 @@ lazy val kernelSpark = (project in file("kernel-spark"))
   .dependsOn(kernelApi)
   .dependsOn(kernelDefaults)
   .dependsOn(unity)
-  .dependsOn(spark % "test->test")
+  .dependsOn(spark % "compile->compile;test->test;provided->provided")
   .dependsOn(goldenTables % "test")
   .settings(
     name := "kernel-spark",
@@ -1658,8 +1658,40 @@ val createTargetClassesDir = taskKey[Unit]("create target classes dir")
  */
 
 // Don't use these groups for any other projects
+lazy val sparkAssembly = (project in file("spark-assembly"))
+  .dependsOn(spark, kernelSpark)
+  .disablePlugins(JavaFormatterPlugin, ScalafmtPlugin)
+  .settings(
+    name := "delta-spark-with-kernel",
+    commonSettings,
+    releaseSettings,
+    
+    // Assembly configuration for fat jar
+    assembly / logLevel := Level.Info,
+    assembly / assemblyJarName := s"${name.value}_${scalaBinaryVersion.value}-${version.value}.jar",
+    assembly / test := {},
+    assembly / assemblyMergeStrategy := {
+      // Handle duplicate files
+      case "module-info.class" => MergeStrategy.discard
+      case PathList("META-INF", xs @ _*) => xs.map(_.toLowerCase) match {
+        case ("manifest.mf" :: Nil) | ("index.list" :: Nil) | ("dependencies" :: Nil) =>
+          MergeStrategy.discard
+        case ps @ (x :: xs) if ps.last.endsWith(".sf") || ps.last.endsWith(".dsa") =>
+          MergeStrategy.discard
+        case "services" :: _ =>  MergeStrategy.filterDistinctLines
+        case _ => MergeStrategy.first
+      }
+      case PathList("reference.conf") => MergeStrategy.concat
+      case PathList("application.conf") => MergeStrategy.concat
+      case x => MergeStrategy.first
+    },
+    
+    // Make the 'compile' invoke the 'assembly' task to generate the uber jar.
+    Compile / packageBin := assembly.value
+  )
+
 lazy val sparkGroup = project
-  .aggregate(spark, kernelSpark, contribs, storage, storageS3DynamoDB, sharing, hudi)
+  .aggregate(spark, kernelSpark, sparkAssembly, contribs, storage, storageS3DynamoDB, sharing, hudi)
   .settings(
     // crossScalaVersions must be set to Nil on the aggregating project
     crossScalaVersions := Nil,
