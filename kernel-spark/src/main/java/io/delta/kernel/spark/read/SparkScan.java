@@ -15,6 +15,7 @@
  */
 package io.delta.kernel.spark.read;
 
+import io.delta.kernel.TableManager;
 import io.delta.kernel.data.MapValue;
 import io.delta.kernel.data.Row;
 import io.delta.kernel.defaults.engine.DefaultEngine;
@@ -61,6 +62,7 @@ public class SparkScan implements Scan, SupportsReportStatistics {
   private final List<PartitionedFile> partitionedFiles = new ArrayList<>();
   private long totalBytes = 0L;
   private volatile boolean planned = false;
+  private final TableManager deltaTableManager;
 
   public SparkScan(
       String tablePath,
@@ -70,7 +72,8 @@ public class SparkScan implements Scan, SupportsReportStatistics {
       Predicate[] pushedToKernelFilters,
       Filter[] dataFilters,
       io.delta.kernel.Scan kernelScan,
-      CaseInsensitiveStringMap options) {
+      CaseInsensitiveStringMap options,
+      TableManager deltaTableManager) {
 
     final String normalizedTablePath = Objects.requireNonNull(tablePath, "tablePath is null");
     this.tablePath =
@@ -87,6 +90,7 @@ public class SparkScan implements Scan, SupportsReportStatistics {
     this.hadoopConf = SparkSession.active().sessionState().newHadoopConfWithOptions(scalaOptions);
     this.sqlConf = SQLConf.get();
     this.zoneId = ZoneId.of(sqlConf.sessionLocalTimeZone());
+    this.deltaTableManager = deltaTableManager;
   }
 
   /**
@@ -120,7 +124,7 @@ public class SparkScan implements Scan, SupportsReportStatistics {
 
   @Override
   public MicroBatchStream toMicroBatchStream(String checkpointLocation) {
-    return new SparkMicroBatchStream();
+    return new SparkMicroBatchStream(deltaTableManager);
   }
 
   @Override

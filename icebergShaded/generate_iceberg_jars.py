@@ -119,13 +119,17 @@ def prepare_iceberg_source():
 
 def generate_iceberg_jars():
     print(">>> Compiling JARs")
+    # Set JAVA_HOME to use JDK 11 for Iceberg build (required by Gradle)
+    java11_home = "/Library/Java/JavaVirtualMachines/amazon-corretto-11.jdk/Contents/Home"
+    gradle_env = {"JAVA_HOME": java11_home}
+    
     with WorkingDirectory(iceberg_src_dir):
         # disable style checks (can fail with patches) and tests
         build_args = "-x spotlessCheck -x checkstyleMain -x test -x integrationTest -x javadoc"
-        run_cmd("./gradlew :iceberg-core:build %s" % build_args)
-        run_cmd("./gradlew :iceberg-parquet:build %s" % build_args)
-        run_cmd("./gradlew :iceberg-hive-metastore:build %s" % build_args)
-        run_cmd("./gradlew :iceberg-data:build %s" % build_args)
+        run_cmd("./gradlew :iceberg-core:build %s" % build_args, env=gradle_env)
+        run_cmd("./gradlew :iceberg-parquet:build %s" % build_args, env=gradle_env)
+        run_cmd("./gradlew :iceberg-hive-metastore:build %s" % build_args, env=gradle_env)
+        run_cmd("./gradlew :iceberg-data:build %s" % build_args, env=gradle_env)
 
     print(">>> Copying JARs to lib directory")
     shutil.rmtree(iceberg_lib_dir, ignore_errors=True)

@@ -162,7 +162,7 @@ public class UCCatalogManagedClient {
     return versionOpt.map(String::valueOf).orElse("latest");
   }
 
-  private GetCommitsResponse getRatifiedCommitsFromUC(
+  public GetCommitsResponse getRatifiedCommitsFromUC(
       String ucTableId, String tablePath, Optional<Long> versionOpt) {
     logger.info(
         "[{}] Invoking the UCClient to get ratified commits at version {}",
@@ -237,7 +237,7 @@ public class UCCatalogManagedClient {
    * loading a Delta table.
    */
   @VisibleForTesting
-  static List<ParsedLogData> getSortedKernelParsedDeltaDataFromRatifiedCommits(
+  public static List<ParsedLogData> getSortedKernelParsedDeltaDataFromRatifiedCommits(
       String ucTableId, List<Commit> commits) {
     final List<ParsedLogData> result =
         timeUncheckedOperation(
