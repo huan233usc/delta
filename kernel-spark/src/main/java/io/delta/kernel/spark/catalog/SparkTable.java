@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package io.delta.kernel.spark.table;
+package io.delta.kernel.spark.catalog;
 
 import static io.delta.kernel.spark.utils.ScalaUtils.toScalaMap;
 import static java.util.Objects.requireNonNull;
@@ -130,6 +130,22 @@ public class SparkTable implements Table, SupportsRead {
    */
   public SparkTable(Identifier identifier, String tablePath) {
     this(identifier, tablePath, Collections.emptyMap());
+  }
+
+  /**
+   * Constructor that accepts a Spark CatalogTable. Extracts the table location from the catalog
+   * table and initializes the SparkTable using that location with empty options.
+   *
+   * @param identifier logical table identifier used by Spark's catalog
+   * @param catalogTable the Spark CatalogTable containing table metadata including location
+   * @throws NullPointerException if identifier or catalogTable is null
+   */
+  public SparkTable(
+      Identifier identifier, org.apache.spark.sql.catalyst.catalog.CatalogTable catalogTable) {
+    this(
+        identifier,
+        requireNonNull(catalogTable, "catalogTable is null").location().toString(),
+        Collections.emptyMap());
   }
 
   @Override
