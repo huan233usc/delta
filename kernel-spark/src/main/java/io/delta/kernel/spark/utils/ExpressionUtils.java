@@ -15,8 +15,6 @@
  */
 package io.delta.kernel.spark.utils;
 
-import static org.apache.spark.sql.connector.catalog.CatalogV2Implicits.parseColumnPath;
-
 import com.google.common.annotations.VisibleForTesting;
 import io.delta.kernel.expressions.And;
 import io.delta.kernel.expressions.Column;
@@ -204,7 +202,10 @@ public final class ExpressionUtils {
    * @return Delta Kernel Column object representing the parsed column path
    */
   private static Column kernelColumn(String attribute) {
-    scala.collection.Seq<String> seq = parseColumnPath(attribute);
+    // Access Scala object's method from Java using MODULE$ accessor
+    scala.collection.Seq<String> seq =
+        org.apache.spark.sql.connector.catalog.CatalogV2Implicits$.MODULE$.parseColumnPath(
+            attribute);
     String[] parts = JavaConverters.seqAsJavaList(seq).toArray(new String[0]);
     return new Column(parts);
   }

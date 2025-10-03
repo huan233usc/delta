@@ -733,7 +733,6 @@ lazy val kernelSpark = (project in file("kernel-spark"))
     name := "kernel-spark",
     commonSettings,
     javafmtCheckSettings,
-    skipReleaseSettings,
     Test / javaOptions ++= Seq("-ea"),
     libraryDependencies ++= Seq(
       "org.apache.spark" %% "spark-sql" % sparkVersion.value % "provided",
@@ -751,7 +750,13 @@ lazy val kernelSpark = (project in file("kernel-spark"))
       case x =>
         val oldStrategy = (assembly / assemblyMergeStrategy).value
         oldStrategy(x)
-    }
+    },
+    // Publish the assembly jar as an additional artifact with classifier "assembly"
+    assembly / artifact := {
+      val art = (assembly / artifact).value
+      art.withClassifier(Some("assembly"))
+    },
+    addArtifact(assembly / artifact, assembly)
   )
   // TODO to enable unit doc for kernelSpark.
 

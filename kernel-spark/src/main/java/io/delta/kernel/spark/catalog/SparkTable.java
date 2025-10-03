@@ -87,7 +87,10 @@ public class SparkTable implements Table, SupportsRead {
     this.options = options;
     this.v1CatalogTable = v1CatalogTable;
     this.hadoopConf =
-        SparkSession.active().sessionState().newHadoopConfWithOptions(toScalaMap(options));
+        SparkSession.active()
+            .sessionState()
+            .newHadoopConfWithOptions(
+                v1CatalogTable.map(t -> t.storage().properties()).orElse(toScalaMap((options))));
     this.snapshot =
         (SnapshotImpl)
             io.delta.kernel.TableManager.loadSnapshot(tablePath)

@@ -33,7 +33,7 @@ class MaybeFallbackV1Connector(session: SparkSession)
         val newTable = replaceKernelWithFallback(table)
         i.copy(table = newTable)
       case Batch(fallback) => fallback
-      case Streaming(fallback) if isReadOnly(plan) => fallback
+      case Streaming(fallback) if !isReadOnly(plan) => fallback
     }
   }
 
@@ -46,6 +46,9 @@ class MaybeFallbackV1Connector(session: SparkSession)
       case d: SparkTable =>
         val v1CatalogTable = d.getV1CatalogTable()
         if (v1CatalogTable.isPresent()) {
+          // scalastyle:off println
+          println("falling back")
+          // scalastyle:off println
           val catalogTable = v1CatalogTable.get()
           Some(dsv2.copy(table = DeltaTableV2(
             session,
