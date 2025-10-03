@@ -91,6 +91,23 @@ class DeltaSparkSessionExtension extends (SparkSessionExtensions => Unit) {
     extensions.injectResolutionRule { session =>
       PreprocessTimeTravel(session)
     }
+    // Inject MaybeFallbackV1Connector to fallback SparkTable to DeltaTableV2 for unsupported
+    // operations (e.g., streaming, write operations) in kernel-spark.
+    try {
+      // scalastyle:off classforname
+      val constructor = Class.forName("io.delta.kernel.spark.MaybeFallbackV1Connector")
+        .getConstructor(classOf[org.apache.spark.sql.SparkSession])
+      // scalastyle:on classforname
+      extensions.injectResolutionRule { session =>
+        try {
+          constructor.newInstance(session).asInstanceOf[Rule[LogicalPlan]]
+        } catch {
+          case NonFatal(_) => new NoOpRule
+        }
+      }
+    } catch {
+      case NonFatal(_) => // Do nothing if kernel-spark is not available
+    }
     extensions.injectResolutionRule { session =>
       // To ensure the parquet field id reader is turned on, these fields are required to support
       // id column mapping mode for Delta.

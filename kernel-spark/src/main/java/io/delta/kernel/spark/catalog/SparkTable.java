@@ -22,6 +22,7 @@ import io.delta.kernel.internal.SnapshotImpl;
 import io.delta.kernel.spark.read.SparkScanBuilder;
 import io.delta.kernel.spark.utils.SchemaUtils;
 import java.util.*;
+import java.util.Optional;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.connector.catalog.*;
@@ -52,6 +53,7 @@ public class SparkTable implements Table, SupportsRead {
   private final StructType partitionSchema;
   private final Column[] columns;
   private final Transform[] partitionTransforms;
+  private final Optional<org.apache.spark.sql.catalyst.catalog.CatalogTable> v1CatalogTable;
 
   /**
    * Creates a SparkTable backed by a Delta Kernel snapshot and initializes Spark-facing metadata
@@ -71,9 +73,19 @@ public class SparkTable implements Table, SupportsRead {
    * @throws NullPointerException if identifier or tablePath is null
    */
   public SparkTable(Identifier identifier, String tablePath, Map<String, String> options) {
+    this(identifier, tablePath, options, Optional.empty());
+  }
+
+  /** Private constructor with v1CatalogTable parameter. */
+  private SparkTable(
+      Identifier identifier,
+      String tablePath,
+      Map<String, String> options,
+      Optional<org.apache.spark.sql.catalyst.catalog.CatalogTable> v1CatalogTable) {
     this.identifier = requireNonNull(identifier, "identifier is null");
     this.tablePath = requireNonNull(tablePath, "snapshot is null");
     this.options = options;
+    this.v1CatalogTable = v1CatalogTable;
     this.hadoopConf =
         SparkSession.active().sessionState().newHadoopConfWithOptions(toScalaMap(options));
     this.snapshot =
@@ -145,7 +157,17 @@ public class SparkTable implements Table, SupportsRead {
     this(
         identifier,
         requireNonNull(catalogTable, "catalogTable is null").location().toString(),
-        Collections.emptyMap());
+        Collections.emptyMap(),
+        Optional.of(catalogTable));
+  }
+
+  /**
+   * Returns the V1 CatalogTable if this SparkTable was created from a catalog table.
+   *
+   * @return Optional containing the CatalogTable, or empty if this table was created from a path
+   */
+  public Optional<org.apache.spark.sql.catalyst.catalog.CatalogTable> getV1CatalogTable() {
+    return v1CatalogTable;
   }
 
   @Override

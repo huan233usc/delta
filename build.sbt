@@ -745,7 +745,13 @@ lazy val kernelSpark = (project in file("kernel-spark"))
       "org.junit.jupiter" % "junit-jupiter-params" % "5.8.2" % "test",
       "net.aichler" % "jupiter-interface" % "0.11.1" % "test"
     ),
-    Test / testOptions += Tests.Argument(TestFrameworks.JUnit, "-v", "-a")
+    Test / testOptions += Tests.Argument(TestFrameworks.JUnit, "-v", "-a"),
+    assembly / assemblyMergeStrategy := {
+      case PathList("META-INF", "versions", "9", "module-info.class") => MergeStrategy.discard
+      case x =>
+        val oldStrategy = (assembly / assemblyMergeStrategy).value
+        oldStrategy(x)
+    }
   )
   // TODO to enable unit doc for kernelSpark.
 
