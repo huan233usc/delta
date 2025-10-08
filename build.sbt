@@ -727,7 +727,7 @@ lazy val kernelDefaults = (project in file("kernel/kernel-defaults"))
 lazy val kernelSpark = (project in file("kernel-spark"))
   .dependsOn(kernelApi)
   .dependsOn(kernelDefaults)
-  .dependsOn(spark % "test->test")
+  .dependsOn(spark % "compile->compile;test->test")
   .dependsOn(goldenTables % "test")
   .settings(
     name := "kernel-spark",
@@ -745,7 +745,16 @@ lazy val kernelSpark = (project in file("kernel-spark"))
       "org.junit.jupiter" % "junit-jupiter-params" % "5.8.2" % "test",
       "net.aichler" % "jupiter-interface" % "0.11.1" % "test"
     ),
-    Test / testOptions += Tests.Argument(TestFrameworks.JUnit, "-v", "-a")
+    Test / testOptions += Tests.Argument(TestFrameworks.JUnit, "-v", "-a"),
+    
+    // Shade delta-spark classes to avoid conflicts
+    assembly / assemblyShadeRules := Seq(
+      ShadeRule.rename("org.apache.spark.sql.delta.**" -> "io.delta.kernel.shaded.org.apache.spark.sql.delta.@1").inAll
+    ),
+    assembly / assemblyMergeStrategy := {
+      case "module-info.class" => MergeStrategy.discard
+      case x => MergeStrategy.first
+    }
   )
   // TODO to enable unit doc for kernelSpark.
 

@@ -16,6 +16,9 @@
 package io.delta.kernel.spark.read;
 
 import io.delta.kernel.expressions.Predicate;
+import io.delta.kernel.internal.SnapshotImpl;
+import io.delta.kernel.shaded.org.apache.spark.sql.delta.DeltaParquetFileFormat;
+import io.delta.kernel.spark.utils.KernelToDeltaSparkConverter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -30,7 +33,6 @@ import org.apache.spark.sql.execution.datasources.FileFormat$;
 import org.apache.spark.sql.execution.datasources.FilePartition;
 import org.apache.spark.sql.execution.datasources.FilePartition$;
 import org.apache.spark.sql.execution.datasources.PartitionedFile;
-import org.apache.spark.sql.execution.datasources.parquet.ParquetFileFormat;
 import org.apache.spark.sql.execution.datasources.parquet.ParquetUtils;
 import org.apache.spark.sql.internal.SQLConf;
 import org.apache.spark.sql.sources.Filter;
@@ -53,6 +55,9 @@ public class SparkBatch implements Batch {
   private final long totalBytes;
   private scala.collection.immutable.Map<String, String> scalaOptions;
   private final List<PartitionedFile> partitionedFiles;
+  private final SnapshotImpl snapshot;
+  private final io.delta.kernel.shaded.org.apache.spark.sql.delta.actions.Protocol protocol;
+  private final io.delta.kernel.shaded.org.apache.spark.sql.delta.actions.Metadata metadata;
 
   public SparkBatch(
       String tablePath,
@@ -64,7 +69,8 @@ public class SparkBatch implements Batch {
       Filter[] dataFilters,
       long totalBytes,
       scala.collection.immutable.Map<String, String> scalaOptions,
-      Configuration hadoopConf) {
+      Configuration hadoopConf,
+      SnapshotImpl snapshot) {
 
     this.tablePath = Objects.requireNonNull(tablePath, "tableName is null");
     this.dataSchema = Objects.requireNonNull(dataSchema, "dataSchema is null");
@@ -83,6 +89,13 @@ public class SparkBatch implements Batch {
     this.scalaOptions = Objects.requireNonNull(scalaOptions, "scalaOptions is null");
     this.hadoopConf = Objects.requireNonNull(hadoopConf, "hadoopConf is null");
     this.sqlConf = SQLConf.get();
+    this.snapshot = Objects.requireNonNull(snapshot, "snapshot is null");
+
+    // Convert kernel protocol and metadata to delta-spark protocol and metadata
+    KernelToDeltaSparkConverter.ProtocolAndMetadata converted =
+        KernelToDeltaSparkConverter.convertFromSnapshot(snapshot);
+    this.protocol = converted.protocol;
+    this.metadata = converted.metadata;
   }
 
   @Override
@@ -105,16 +118,41 @@ public class SparkBatch implements Batch {
             new Tuple2<>(
                 FileFormat$.MODULE$.OPTION_RETURNING_BATCH(),
                 String.valueOf(enableVectorizedReader)));
+
+    // Use DeltaParquetFileFormat instead of ParquetFileFormat
+    // Check if row tracking is enabled to set the appropriate flags
+    boolean rowTrackingSupported =
+        io.delta.kernel.internal.tablefeatures.TableFeatures.isRowTrackingSupported(
+            snapshot.getProtocol());
+    boolean rowTrackingEnabled = false;
+    if (rowTrackingSupported) {
+      String rowTrackingConfig =
+          snapshot.getMetadata().getConfiguration().get("delta.enableRowTracking");
+      rowTrackingEnabled = rowTrackingConfig != null && Boolean.parseBoolean(rowTrackingConfig);
+    }
+
+    // When row tracking is enabled, set nullableRowTrackingGeneratedFields = true
+    // This allows DeltaParquetFileFormat to properly handle row tracking metadata fields
+    // The materialized row ID and row commit version columns can be null when not materialized
+    DeltaParquetFileFormat deltaParquetFileFormat =
+        new DeltaParquetFileFormat(
+            protocol,
+            metadata,
+            false, // nullableRowTrackingConstantFields
+            rowTrackingEnabled, // nullableRowTrackingGeneratedFields
+            true, // optimizationsEnabled
+            Option.apply(tablePath),
+            false); // isCDCRead
+
     Function1<PartitionedFile, Iterator<InternalRow>> readFunc =
-        new ParquetFileFormat()
-            .buildReaderWithPartitionValues(
-                SparkSession.active(),
-                dataSchema,
-                partitionSchema,
-                readDataSchema,
-                JavaConverters.asScalaBuffer(Arrays.asList(dataFilters)).toSeq(),
-                optionsWithBatch,
-                hadoopConf);
+        deltaParquetFileFormat.buildReaderWithPartitionValues(
+            SparkSession.active(),
+            dataSchema,
+            partitionSchema,
+            readDataSchema,
+            JavaConverters.asScalaBuffer(Arrays.asList(dataFilters)).toSeq(),
+            optionsWithBatch,
+            hadoopConf);
 
     return new SparkReaderFactory(readFunc, enableVectorizedReader);
   }
