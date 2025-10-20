@@ -75,6 +75,9 @@ val parquet4sVersion = "1.9.4"
 val protoVersion = "3.25.1"
 val grpcVersion = "1.62.2"
 
+// Unity Catalog versions - jars will be generated from master branch
+val generateUCJarsTask = TaskKey[Unit]("generateUCJars", "Generate Unity Catalog JARs from master branch")
+
 scalaVersion := default_scala_version.value
 
 // crossScalaVersions must be set to Nil on the root project
@@ -677,8 +680,11 @@ lazy val spark = (project in file("spark-combined"))
       "org.apache.spark" %% "spark-core" % sparkVersion.value % "test" classifier "tests",
       "org.apache.spark" %% "spark-sql" % sparkVersion.value % "test" classifier "tests",
       "org.apache.spark" %% "spark-hive" % sparkVersion.value % "test" classifier "tests",
-      "org.mockito" % "mockito-inline" % "4.11.0" % "test",
+      "org.mockito" % "mockito-inline" % "4.11.0" % "test"
     ),
+
+    // Add Unity Catalog JARs to test classpath
+    Test / unmanagedJars ++= (unityCatalogShaded / Compile / unmanagedJars).value,
 
     Test / testOptions += Tests.Argument("-oDF"),
     Test / testOptions += Tests.Argument(TestFrameworks.JUnit, "-v", "-a"),
@@ -1198,6 +1204,25 @@ lazy val hudi = (project in file("hudi"))
     },
     // Make the 'compile' invoke the 'assembly' task to generate the uber jar.
     Compile / packageBin := assembly.value
+  )
+
+lazy val unityCatalogShaded = (project in file("unityCatalogShaded"))
+  .disablePlugins(JavaFormatterPlugin, ScalafmtPlugin)
+  .settings(
+    name := "unitycatalog-shaded",
+    commonSettings,
+    skipReleaseSettings,
+
+    // Compile, patch and generated Unity Catalog JARs from master branch
+    generateUCJarsTask := {
+      import sys.process._
+      val scriptPath = baseDirectory.value / "generate_uc_jars.py"
+      // Download Unity Catalog code in `unitycatalog_src` dir and generate the JARs in `lib` dir
+      Seq("python3", scriptPath.getPath)!
+    },
+    Compile / unmanagedJars := (Compile / unmanagedJars).dependsOn(generateUCJarsTask).value,
+    cleanFiles += baseDirectory.value / "unitycatalog_src",
+    cleanFiles += baseDirectory.value / "lib",
   )
 
 /**
