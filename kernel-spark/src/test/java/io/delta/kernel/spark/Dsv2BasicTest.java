@@ -179,6 +179,142 @@ public class Dsv2BasicTest {
             + rootCause.getMessage());
   }
 
+  @Test
+  public void testReadTableWithColumnMapping(@TempDir File deltaTablePath) {
+    String tablePath = deltaTablePath.getAbsolutePath();
+
+    // Create a Delta table with column mapping enabled using standard Delta Lake
+    spark.sql(
+        String.format(
+            "CREATE TABLE delta.`%s` (id INT, name STRING, value DOUBLE) "
+                + "USING delta "
+                + "TBLPROPERTIES ("
+                + "  'delta.columnMapping.mode' = 'name', "
+                + "  'delta.minReaderVersion' = '2', "
+                + "  'delta.minWriterVersion' = '5')",
+            tablePath));
+
+    // Insert some data
+    spark.sql(
+        String.format(
+            "INSERT INTO delta.`%s` VALUES (1, 'Alice', 100.0), (2, 'Bob', 200.0), (3, 'Charlie', 300.0)",
+            tablePath));
+
+    // Read using DSv2 connector - should use DeltaParquetFileFormat internally
+    Dataset<Row> result =
+        spark.sql(String.format("SELECT * FROM dsv2.delta.`%s` ORDER BY id", tablePath));
+
+    List<Row> expectedRows =
+        Arrays.asList(
+            RowFactory.create(1, "Alice", 100.0),
+            RowFactory.create(2, "Bob", 200.0),
+            RowFactory.create(3, "Charlie", 300.0));
+
+    assertDatasetEquals(result, expectedRows);
+  }
+
+  @Test
+  public void testReadTableWithGeneratedColumn(@TempDir File deltaTablePath) {
+    String tablePath = deltaTablePath.getAbsolutePath();
+
+    // Create a Delta table with generated column using DeltaTable builder
+    io.delta.tables.DeltaTable.create(spark)
+        .location(tablePath)
+        .addColumn("id", "INT")
+        .addColumn("price", "DOUBLE")
+        .addColumn(
+            io.delta.tables.DeltaTable.columnBuilder(spark, "tax")
+                .dataType("DOUBLE")
+                .generatedAlwaysAs("price * 0.1")
+                .build())
+        .execute();
+
+    // Insert data (generated column will be computed automatically)
+    spark.sql(
+        String.format(
+            "INSERT INTO delta.`%s` (id, price) VALUES (1, 100.0), (2, 200.0)", tablePath));
+
+    // Read using DSv2 connector - should use DeltaParquetFileFormat internally
+    Dataset<Row> result =
+        spark.sql(String.format("SELECT id, price, tax FROM dsv2.delta.`%s`", tablePath));
+
+    List<Row> expectedRows =
+        Arrays.asList(RowFactory.create(1, 100.0, 10.0), RowFactory.create(2, 200.0, 20.0));
+
+    assertDatasetEquals(result, expectedRows);
+  }
+
+  @Test
+  public void testReadTableWithIdMapping(@TempDir File deltaTablePath) {
+    String tablePath = deltaTablePath.getAbsolutePath();
+
+    // Create a Delta table with ID mapping mode enabled
+    spark.sql(
+        String.format(
+            "CREATE TABLE delta.`%s` (id INT, name STRING, value DOUBLE) "
+                + "USING delta "
+                + "TBLPROPERTIES ("
+                + "  'delta.columnMapping.mode' = 'id', "
+                + "  'delta.minReaderVersion' = '2', "
+                + "  'delta.minWriterVersion' = '5')",
+            tablePath));
+
+    // Insert some data
+    spark.sql(
+        String.format(
+            "INSERT INTO delta.`%s` VALUES (1, 'Alice', 100.0), (2, 'Bob', 200.0), (3, 'Charlie', 300.0)",
+            tablePath));
+
+    // Read using DSv2 connector - should use DeltaParquetFileFormat internally
+    Dataset<Row> result =
+        spark.sql(String.format("SELECT * FROM dsv2.delta.`%s` ORDER BY id", tablePath));
+
+    List<Row> expectedRows =
+        Arrays.asList(
+            RowFactory.create(1, "Alice", 100.0),
+            RowFactory.create(2, "Bob", 200.0),
+            RowFactory.create(3, "Charlie", 300.0));
+
+    assertDatasetEquals(result, expectedRows);
+  }
+
+  @Test
+  public void testReadTableWithSchemaEvolution(@TempDir File deltaTablePath) {
+    String tablePath = deltaTablePath.getAbsolutePath();
+
+    // Create initial table with column mapping (required for schema evolution)
+    spark.sql(
+        String.format(
+            "CREATE TABLE delta.`%s` (id INT, name STRING) "
+                + "USING delta "
+                + "TBLPROPERTIES ("
+                + "  'delta.columnMapping.mode' = 'name', "
+                + "  'delta.minReaderVersion' = '2', "
+                + "  'delta.minWriterVersion' = '5')",
+            tablePath));
+
+    // Insert initial data
+    spark.sql(String.format("INSERT INTO delta.`%s` VALUES (1, 'Alice'), (2, 'Bob')", tablePath));
+
+    // Add a new column (schema evolution)
+    spark.sql(String.format("ALTER TABLE delta.`%s` ADD COLUMN (value DOUBLE)", tablePath));
+
+    // Insert more data with the new column
+    spark.sql(String.format("INSERT INTO delta.`%s` VALUES (3, 'Charlie', 300.0)", tablePath));
+
+    // Read using DSv2 connector - should handle schema evolution correctly
+    Dataset<Row> result =
+        spark.sql(String.format("SELECT * FROM dsv2.delta.`%s` ORDER BY id", tablePath));
+
+    List<Row> expectedRows =
+        Arrays.asList(
+            RowFactory.create(1, "Alice", null),
+            RowFactory.create(2, "Bob", null),
+            RowFactory.create(3, "Charlie", 300.0));
+
+    assertDatasetEquals(result, expectedRows);
+  }
+
   //////////////////////
   // Private helpers //
   /////////////////////

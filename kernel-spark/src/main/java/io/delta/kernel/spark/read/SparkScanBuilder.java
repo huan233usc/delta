@@ -42,6 +42,7 @@ public class SparkScanBuilder
   private final String tablePath;
   private final StructType dataSchema;
   private final StructType partitionSchema;
+  private final SnapshotImpl snapshot;
   private final CaseInsensitiveStringMap options;
   private final Set<String> partitionColumnSet;
   private StructType requiredDataSchema;
@@ -60,7 +61,8 @@ public class SparkScanBuilder
       StructType partitionSchema,
       SnapshotImpl snapshot,
       CaseInsensitiveStringMap options) {
-    this.kernelScanBuilder = requireNonNull(snapshot, "snapshot is null").getScanBuilder();
+    this.snapshot = requireNonNull(snapshot, "snapshot is null");
+    this.kernelScanBuilder = this.snapshot.getScanBuilder();
     this.tablePath = requireNonNull(tablePath, "tablePath is null");
     this.dataSchema = requireNonNull(dataSchema, "dataSchema is null");
     this.partitionSchema = requireNonNull(partitionSchema, "partitionSchema is null");
@@ -153,7 +155,8 @@ public class SparkScanBuilder
         pushedKernelPredicates,
         dataFilters,
         kernelScanBuilder.build(),
-        options);
+        options,
+        snapshot);
   }
 
   CaseInsensitiveStringMap getOptions() {

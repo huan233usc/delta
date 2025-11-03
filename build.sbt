@@ -741,7 +741,16 @@ lazy val kernelSpark = (project in file("kernel-spark"))
       "net.aichler" % "jupiter-interface" % "0.11.1" % "test",
       "org.scalatest" %% "scalatest" % scalaTestVersion % "test"
     ),
-    Test / testOptions += Tests.Argument(TestFrameworks.JUnit, "-v", "-a")
+    Test / testOptions += Tests.Argument(TestFrameworks.JUnit, "-v", "-a"),
+    
+    // Shade delta-spark classes to avoid conflicts
+    assembly / assemblyShadeRules := Seq(
+      ShadeRule.rename("org.apache.spark.sql.delta.**" -> "io.delta.kernel.shaded.org.apache.spark.sql.delta.@1").inAll
+    ),
+    assembly / assemblyMergeStrategy := {
+      case "module-info.class" => MergeStrategy.discard
+      case x => MergeStrategy.first
+    }
   )
   // TODO to enable unit doc for kernelSpark.
 
