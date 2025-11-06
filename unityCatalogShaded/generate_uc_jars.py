@@ -22,6 +22,7 @@ import glob
 import shutil
 import subprocess
 import shlex
+import re
 from os import path
 
 uc_lib_dir_name = "lib"
@@ -30,16 +31,43 @@ uc_src_dir_name = "unitycatalog_src"  # this is a git dir
 # Use master branch
 uc_src_branch = "main"
 
-# Relative to uc_src directory.
-uc_src_compiled_jar_rel_glob_patterns = [
-    "server-shaded/target/unitycatalog-server-shaded-assembly-*.jar",  # Shaded server with all dependencies
-    "connectors/spark/target/scala-2.12/unitycatalog-spark_2.12-*.jar",  # Scala 2.12 version
-    "target/clients/java/target/unitycatalog-client-*.jar"
-]
-
 uc_root_dir = path.abspath(path.dirname(__file__))
 uc_src_dir = path.join(uc_root_dir, uc_src_dir_name)
 uc_lib_dir = path.join(uc_root_dir, uc_lib_dir_name)
+
+# Detect Scala version from Delta's build.sbt
+def get_scala_version():
+    """Read Scala version from Delta's build.sbt"""
+    delta_root = path.dirname(uc_root_dir)
+    build_sbt_path = path.join(delta_root, "build.sbt")
+    
+    scala_version = "2.13.16"  # Default fallback
+    scala_binary = "2.13"
+    
+    try:
+        with open(build_sbt_path, 'r') as f:
+            content = f.read()
+            # Look for: val scala213 = "2.13.16"
+            match = re.search(r'val\s+scala213\s*=\s*"([^"]+)"', content)
+            if match:
+                scala_version = match.group(1)
+                # Extract binary version (2.13 from 2.13.16)
+                scala_binary = '.'.join(scala_version.split('.')[:2])
+                print(f">>> Detected Scala version {scala_version} (binary: {scala_binary}) from Delta build.sbt")
+    except Exception as e:
+        print(f">>> Warning: Could not read Scala version from build.sbt: {e}")
+        print(f">>> Using default Scala version {scala_version}")
+    
+    return scala_version, scala_binary
+
+scala_version, scala_binary = get_scala_version()
+
+# Relative to uc_src directory.
+uc_src_compiled_jar_rel_glob_patterns = [
+    "server-shaded/target/unitycatalog-server-shaded-assembly-*.jar",  # Shaded server with all dependencies
+    f"connectors/spark/target/scala-{scala_binary}/unitycatalog-spark_{scala_binary}-*.jar",  # Scala version
+    "target/clients/java/target/unitycatalog-client-*.jar"
+]
 
 
 def uc_jars_exist():
@@ -65,28 +93,23 @@ def prepare_uc_source():
         run_cmd("git clone --depth 1 --branch %s https://github.com/unitycatalog/unitycatalog.git %s" %
                 (uc_src_branch, uc_src_dir_name))
         
-        # Patch build.sbt to support Scala 2.12
-        print(">>> Patching Unity Catalog build.sbt for Scala 2.12")
+        # Patch build.sbt to use Delta's Scala version
+        print(f">>> Patching Unity Catalog build.sbt to use Scala {scala_version}")
         build_sbt_path = path.join(uc_src_dir, "build.sbt")
         with open(build_sbt_path, 'r') as f:
             content = f.read()
         
-        # Add Scala 2.12 version variable
-        content = content.replace(
-            'lazy val scala213 = "2.13.16"',
-            'lazy val scala212 = "2.12.18"\nlazy val scala213 = "2.13.16"'
+        # Update Scala 2.13 version to match Delta's version
+        content = re.sub(
+            r'lazy val scala213 = "[^"]+"',
+            f'lazy val scala213 = "{scala_version}"',
+            content
         )
         
-        # Update spark connector to support Scala 2.12 cross-compilation
-        content = content.replace(
-            'crossScalaVersions := Seq(scala213),',
-            'crossScalaVersions := Seq(scala212, scala213),'
-        )
-        
-        # Use Spark 3.5.3 and Delta 3.2.1 for Scala 2.12 compatibility
+        # Use Spark 3.5.7 and Delta 3.2.1 for compatibility with Delta master
         content = content.replace(
             'lazy val sparkVersion = "4.0.0"',
-            'lazy val sparkVersion = "3.5.3"'
+            'lazy val sparkVersion = "3.5.7"'
         )
         content = content.replace(
             'lazy val deltaVersion = "4.0.0"',
@@ -96,17 +119,26 @@ def prepare_uc_source():
         with open(build_sbt_path, 'w') as f:
             f.write(content)
         
+        # Create .sbtopts file for memory settings
+        sbtopts_path = path.join(uc_src_dir, ".sbtopts")
+        with open(sbtopts_path, 'w') as f:
+            f.write("-J-Xmx4G\n")
+            f.write("-J-Xms2G\n")
+            f.write("-J-XX:+UseG1GC\n")
+        print(">>> Created .sbtopts with memory settings")
+        
         print(">>> Build configuration patched successfully")
 
 
 def generate_uc_jars():
-    print(">>> Compiling Unity Catalog JARs with Scala 2.12")
+    print(f">>> Compiling Unity Catalog JARs with Scala {scala_version}")
+    # Memory settings are configured in .sbtopts file
     with WorkingDirectory(uc_src_dir):
-        # Build Unity Catalog with tests skipped, using Scala 2.12 for spark connector
+        # Build Unity Catalog with tests skipped, using detected Scala version for spark connector
         run_cmd("build/sbt clean")
-        run_cmd("build/sbt -DskipTests ++2.12.18 spark/package")  # Compile spark connector with Scala 2.12
+        run_cmd(f"build/sbt -DskipTests ++{scala_version} spark/package")  # Compile spark connector
         run_cmd("build/sbt -DskipTests client/package")  # Compile client
-        # Build the shaded server JAR with all dependencies (server is Scala 2.12)
+        # Build the shaded server JAR with all dependencies
         run_cmd("build/sbt -DskipTests serverShaded/assembly")
 
     print(">>> Copying JARs to lib directory")
