@@ -18,12 +18,34 @@ package io.delta.kernel.internal.deletionvectors;
 
 import io.delta.kernel.engine.Engine;
 import io.delta.kernel.internal.actions.DeletionVectorDescriptor;
+import io.delta.kernel.internal.actions.Metadata;
+import io.delta.kernel.internal.actions.Protocol;
+import io.delta.kernel.internal.tablefeatures.TableFeatures;
 import io.delta.kernel.internal.util.Tuple2;
 import java.io.IOException;
 import java.util.Optional;
 
 /** Utility methods regarding deletion vectors. */
 public class DeletionVectorUtils {
+
+  /**
+   * Returns whether deletion vectors are readable for the given protocol and metadata. Deletion
+   * vectors are readable if:
+   *
+   * <ul>
+   *   <li>The protocol supports the deletion vectors table feature
+   *   <li>The table format provider is "parquet" (DVs are only supported on parquet tables)
+   * </ul>
+   *
+   * @param protocol the table protocol
+   * @param metadata the table metadata
+   * @return true if deletion vectors are readable, false otherwise
+   */
+  public static boolean isReadable(Protocol protocol, Metadata metadata) {
+    return protocol.supportsFeature(TableFeatures.DELETION_VECTORS_RW_FEATURE)
+        && "parquet".equalsIgnoreCase(metadata.getFormat().getProvider());
+  }
+
   public static Tuple2<DeletionVectorDescriptor, RoaringBitmapArray> loadNewDvAndBitmap(
       Engine engine, String tablePath, DeletionVectorDescriptor dv) {
     DeletionVectorStoredBitmap storedBitmap =
