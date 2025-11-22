@@ -20,9 +20,7 @@ import io.delta.kernel.internal.actions.Protocol;
 import org.apache.spark.sql.delta.DeltaParquetFileFormatBase;
 import scala.Option;
 
-/**
- * V2 implementation (kernel-based) of DeltaParquetFileFormat.
- */
+/** V2 implementation (kernel-based) of DeltaParquetFileFormat. */
 public class DeltaParquetFileFormatV2 extends DeltaParquetFileFormatBase {
   private static final long serialVersionUID = 1L;
 
@@ -45,4 +43,3 @@ public class DeltaParquetFileFormatV2 extends DeltaParquetFileFormatBase {
         false); // isCDCRead
   }
 }
-

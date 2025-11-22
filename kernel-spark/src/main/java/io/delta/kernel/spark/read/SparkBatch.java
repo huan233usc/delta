@@ -18,8 +18,6 @@ package io.delta.kernel.spark.read;
 import io.delta.kernel.Snapshot;
 import io.delta.kernel.expressions.Predicate;
 import io.delta.kernel.internal.SnapshotImpl;
-import io.delta.kernel.internal.actions.Metadata;
-import io.delta.kernel.internal.actions.Protocol;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
