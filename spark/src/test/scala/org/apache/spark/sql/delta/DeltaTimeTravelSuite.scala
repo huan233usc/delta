@@ -1030,6 +1030,39 @@ class DeltaTimeTravelSuite extends QueryTest
       ).foreach { case (sql, fail) => assertBlocked(sql, fail) }
     }
   }
+
+  test("kernel-spark V2 time travel with VERSION AS OF") {
+    withTempDir { dir =>
+      val path = dir.getAbsolutePath
+      
+      // Create table and insert data (version 0)
+      spark.range(5).write.format("delta").save(path)
+      
+      // Insert more data (version 1)
+      spark.range(5, 10).write.format("delta").mode("append").save(path)
+      
+      // Insert even more data (version 2)
+      spark.range(10, 15).write.format("delta").mode("append").save(path)
+      
+      // Read current version (should have 15 rows)
+      checkAnswer(
+        spark.read.format("delta").load(path),
+        (0 until 15).map(i => Row(i.toLong))
+      )
+      
+      // Time travel to version 0 (should have 5 rows)
+      checkAnswer(
+        spark.read.format("delta").option("versionAsOf", "0").load(path),
+        (0 until 5).map(i => Row(i.toLong))
+      )
+      
+      // Time travel to version 1 (should have 10 rows)
+      checkAnswer(
+        spark.read.format("delta").option("versionAsOf", "1").load(path),
+        (0 until 10).map(i => Row(i.toLong))
+      )
+    }
+  }
 }
 
 class DeltaTimeTravelWithCatalogOwnedBatch1Suite extends DeltaTimeTravelSuite {

@@ -72,6 +72,9 @@ public class SparkScan implements Scan, SupportsReportStatistics, SupportsRuntim
   private long totalBytes = 0L;
   private volatile boolean planned = false;
 
+  // For COW operations: store AddFile Rows to generate RemoveFile actions later
+  private List<io.delta.kernel.data.Row> scannedAddFiles = new ArrayList<>();
+
   public SparkScan(
       DeltaSnapshotManager snapshotManager,
       StructType dataSchema,
@@ -108,6 +111,30 @@ public class SparkScan implements Scan, SupportsReportStatistics, SupportsRuntim
     Collections.addAll(fields, readDataSchema.fields());
     Collections.addAll(fields, partitionSchema.fields());
     return new StructType(fields.toArray(new StructField[0]));
+  }
+
+  /**
+   * Get the underlying Kernel Scan for this SparkScan.
+   *
+   * <p>This is used by COW operations (UPDATE/MERGE) to generate RemoveFile actions for replaced
+   * files.
+   */
+  public io.delta.kernel.Scan getKernelScan() {
+    return kernelScan;
+  }
+
+  /**
+   * Get the scanned AddFile Rows for COW operations.
+   *
+   * <p>These are the AddFile actions that were scanned during planning, and will be used to
+   * generate RemoveFile actions for COW operations (UPDATE/MERGE).
+   *
+   * <p>IMPORTANT: This list is only populated during scan planning. Call {@link #ensurePlanned()}
+   * before accessing this list.
+   */
+  public List<io.delta.kernel.data.Row> getScannedAddFiles() {
+    ensurePlanned();
+    return scannedAddFiles;
   }
 
   @Override
@@ -232,6 +259,10 @@ public class SparkScan implements Scan, SupportsReportStatistics, SupportsRuntim
         while (addFileRowIter.hasNext()) {
           final Row row = addFileRowIter.next();
           final AddFile addFile = new AddFile(row.getStruct(0));
+
+          // Save AddFile Row for COW operations (UPDATE/MERGE)
+          // This is needed to generate RemoveFile actions later
+          scannedAddFiles.add(row.getStruct(0));
 
           final PartitionedFile partitionedFile =
               new PartitionedFile(

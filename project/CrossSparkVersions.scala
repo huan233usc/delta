@@ -214,7 +214,10 @@ object SparkVersionSpec {
     targetJvm = "11",
     additionalSourceDir = Some("scala-spark-3.5"),
     antlr4Version = "4.9.3",
-    additionalJavaOptions = Seq.empty
+    additionalJavaOptions = Seq(
+      // Add --add-opens for Java 17 compatibility (kernel-spark UPDATE/DELETE DML serialization)
+      "--add-opens=java.base/sun.security.action=ALL-UNNAMED"
+    )
   )
 
   private val spark40Snapshot = SparkVersionSpec(

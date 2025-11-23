@@ -259,6 +259,55 @@ public interface Transaction {
   }
 
   /**
+   * Generate DELETE actions (RemoveFile) from the given AddFile actions that should be deleted. The
+   * connector is responsible for scanning and filtering the files that match the DELETE predicate
+   * before calling this method.
+   *
+   * <p>This method converts AddFile actions to RemoveFile actions that can be committed in a
+   * transaction. The RemoveFile actions will have:
+   *
+   * <ul>
+   *   <li>dataChange = true (indicating this is a data modification)
+   *   <li>deletionTimestamp = current system time
+   *   <li>extendedFileMetadata = true (preserving file statistics)
+   *   <li>All metadata from the original AddFile (path, size, partition values, stats, tags, etc.)
+   * </ul>
+   *
+   * <p>Example usage:
+   *
+   * <pre>{@code
+   * // 1. Scan table to find files matching delete predicate
+   * Scan scan = table.getScanBuilder(engine).build();
+   * CloseableIterator<Row> addFilesToDelete = scan.getScanFiles(engine);
+   *
+   * // 2. Generate RemoveFile actions
+   * CloseableIterator<Row> deleteActions = Transaction.generateDeleteActions(
+   *     engine, addFilesToDelete);
+   *
+   * // 3. Commit the transaction
+   * transaction.commit(engine, CloseableIterable.inMemoryIterable(deleteActions));
+   * }</pre>
+   *
+   * @param engine {@link Engine} instance (not currently used but included for API consistency).
+   * @param addFilesToDelete Iterator of AddFile actions (as {@link Row}) that should be deleted.
+   *     These are typically obtained from scanning the table with a delete predicate.
+   * @return {@link CloseableIterator} of {@link Row} representing RemoveFile actions to commit
+   *     using {@link Transaction#commit}.
+   * @since 3.4.0
+   */
+  static CloseableIterator<Row> generateDeleteActions(
+      Engine engine, CloseableIterator<Row> addFilesToDelete) {
+    long deletionTimestamp = System.currentTimeMillis();
+    return addFilesToDelete.map(
+        addFileRow -> {
+          AddFile addFile = new AddFile(addFileRow);
+          Row removeFileRow =
+              addFile.toRemoveFileRow(true /* dataChange */, Optional.of(deletionTimestamp));
+          return SingleAction.createRemoveFileSingleAction(removeFileRow);
+        });
+  }
+
+  /**
    * For given data files, generate Delta actions that can be committed in a transaction. These data
    * files are the result of writing the data returned by {@link Transaction#transformLogicalData}
    * with the context returned by {@link Transaction#getWriteContext}.

@@ -18,11 +18,21 @@ package io.delta.kernel.spark.table;
 import static io.delta.kernel.spark.utils.ScalaUtils.toScalaMap;
 import static java.util.Objects.requireNonNull;
 
+import io.delta.kernel.Operation;
+import io.delta.kernel.Scan;
 import io.delta.kernel.Snapshot;
+import io.delta.kernel.Transaction;
+import io.delta.kernel.data.FilteredColumnarBatch;
+import io.delta.kernel.data.Row;
+import io.delta.kernel.internal.InternalScanFileUtils;
+import io.delta.kernel.internal.util.Utils;
 import io.delta.kernel.spark.read.SparkScanBuilder;
 import io.delta.kernel.spark.snapshot.DeltaSnapshotManager;
 import io.delta.kernel.spark.snapshot.PathBasedSnapshotManager;
 import io.delta.kernel.spark.utils.SchemaUtils;
+import io.delta.kernel.spark.write.SparkRowLevelOperationBuilder;
+import io.delta.kernel.utils.CloseableIterable;
+import io.delta.kernel.utils.CloseableIterator;
 import java.util.*;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.spark.sql.SparkSession;
@@ -31,25 +41,38 @@ import org.apache.spark.sql.connector.catalog.*;
 import org.apache.spark.sql.connector.expressions.Expressions;
 import org.apache.spark.sql.connector.expressions.Transform;
 import org.apache.spark.sql.connector.read.ScanBuilder;
+import org.apache.spark.sql.connector.write.LogicalWriteInfo;
+import org.apache.spark.sql.connector.write.RowLevelOperationBuilder;
+import org.apache.spark.sql.connector.write.RowLevelOperationInfo;
+import org.apache.spark.sql.connector.write.WriteBuilder;
 import org.apache.spark.sql.delta.DeltaTableUtils;
+import org.apache.spark.sql.sources.Filter;
 import org.apache.spark.sql.types.StructField;
 import org.apache.spark.sql.types.StructType;
 import org.apache.spark.sql.util.CaseInsensitiveStringMap;
 
 /** DataSource V2 Table implementation for Delta Lake using the Delta Kernel API. */
-public class SparkTable implements Table, SupportsRead {
+public class SparkTable
+    implements Table, SupportsRead, SupportsWrite, SupportsDelete, SupportsRowLevelOperations {
 
   private static final Set<TableCapability> CAPABILITIES =
       Collections.unmodifiableSet(
-          EnumSet.of(TableCapability.BATCH_READ, TableCapability.MICRO_BATCH_READ));
+          EnumSet.of(
+              TableCapability.BATCH_READ,
+              TableCapability.MICRO_BATCH_READ,
+              TableCapability.BATCH_WRITE,
+              TableCapability.TRUNCATE,
+              TableCapability.OVERWRITE_BY_FILTER));
 
   private final Identifier identifier;
+  private final String tablePath;
   private final Map<String, String> options;
   private final DeltaSnapshotManager snapshotManager;
   /** Snapshot created during connector setup */
   private final Snapshot initialSnapshot;
 
   private final Configuration hadoopConf;
+  private final io.delta.kernel.engine.Engine engine;
 
   private final StructType schema;
   private final List<String> partColNames;
@@ -117,6 +140,7 @@ public class SparkTable implements Table, SupportsRead {
       Map<String, String> userOptions,
       Optional<CatalogTable> catalogTable) {
     this.identifier = requireNonNull(identifier, "identifier is null");
+    this.tablePath = requireNonNull(tablePath, "tablePath is null");
     this.catalogTable = catalogTable;
     // Merge options: file system options from catalog + user options (user takes precedence)
     // This follows the same pattern as DeltaTableV2 in delta-spark
@@ -138,6 +162,7 @@ public class SparkTable implements Table, SupportsRead {
 
     this.hadoopConf =
         SparkSession.active().sessionState().newHadoopConfWithOptions(toScalaMap(options));
+    this.engine = io.delta.kernel.defaults.engine.DefaultEngine.create(hadoopConf);
     this.snapshotManager = new PathBasedSnapshotManager(tablePath, hadoopConf);
     // Load the initial snapshot through the manager
     this.initialSnapshot = snapshotManager.loadLatestSnapshot();
@@ -197,6 +222,45 @@ public class SparkTable implements Table, SupportsRead {
     return catalogTable;
   }
 
+  /** Returns the snapshot manager for this table. */
+  public DeltaSnapshotManager snapshotManager() {
+    return snapshotManager;
+  }
+
+  /** Returns the data schema (non-partition columns). */
+  public StructType dataSchema() {
+    return dataSchema;
+  }
+
+  /** Returns the partition schema. */
+  public StructType partitionSchema() {
+    return partitionSchema;
+  }
+
+  /**
+   * Creates a new SparkTable instance with additional time travel options.
+   *
+   * <p>This method is used by {@link org.apache.spark.sql.delta.catalog.DeltaCatalog} to inject
+   * time travel parameters from SQL queries (e.g., VERSION AS OF, TIMESTAMP AS OF).
+   *
+   * <p>The time travel options will be merged with existing options and applied during scan
+   * building.
+   *
+   * @param timeTravelOptions map containing time travel parameters (versionAsOf or timestampAsOf)
+   * @return a new SparkTable instance with time travel options merged
+   */
+  public SparkTable withTimeTravelOptions(Map<String, String> timeTravelOptions) {
+    Map<String, String> mergedOptions = new HashMap<>(this.options);
+    mergedOptions.putAll(timeTravelOptions);
+
+    if (catalogTable.isPresent()) {
+      return new SparkTable(identifier, catalogTable.get(), mergedOptions);
+    } else {
+      // Path-based table
+      return new SparkTable(identifier, this.tablePath, mergedOptions);
+    }
+  }
+
   @Override
   public String name() {
     return identifier.name();
@@ -233,12 +297,262 @@ public class SparkTable implements Table, SupportsRead {
     Map<String, String> combined = new HashMap<>(this.options);
     combined.putAll(scanOptions.asCaseSensitiveMap());
     CaseInsensitiveStringMap merged = new CaseInsensitiveStringMap(combined);
+
+    // Determine which snapshot to use (time travel or latest)
+    Snapshot snapshotToUse = resolveSnapshot(merged);
+
+    // Update schema if snapshot changed (time travel might have different schema)
+    StructType dataSchemaToUse = this.dataSchema;
+    StructType partitionSchemaToUse = this.partitionSchema;
+    if (snapshotToUse != initialSnapshot) {
+      // Time travel: recompute schemas from the time-traveled snapshot
+      StructType timeTravelSchema =
+          SchemaUtils.convertKernelSchemaToSparkSchema(snapshotToUse.getSchema());
+      List<String> timeTravelPartCols = new ArrayList<>(snapshotToUse.getPartitionColumnNames());
+
+      List<StructField> dataFields = new ArrayList<>();
+      List<StructField> partitionFields = new ArrayList<>();
+      Map<String, StructField> fieldMap = new HashMap<>();
+      for (StructField field : timeTravelSchema.fields()) {
+        fieldMap.put(field.name(), field);
+      }
+
+      for (String partColName : timeTravelPartCols) {
+        StructField field = fieldMap.get(partColName);
+        if (field != null) {
+          partitionFields.add(field);
+        }
+      }
+
+      for (StructField field : timeTravelSchema.fields()) {
+        if (!timeTravelPartCols.contains(field.name())) {
+          dataFields.add(field);
+        }
+      }
+
+      dataSchemaToUse = new StructType(dataFields.toArray(new StructField[0]));
+      partitionSchemaToUse = new StructType(partitionFields.toArray(new StructField[0]));
+    }
+
     return new SparkScanBuilder(
-        name(), initialSnapshot, snapshotManager, dataSchema, partitionSchema, merged);
+        name(), snapshotToUse, snapshotManager, dataSchemaToUse, partitionSchemaToUse, merged);
+  }
+
+  /**
+   * Resolves the snapshot to use based on time travel options.
+   *
+   * <p>Supports the following options:
+   *
+   * <ul>
+   *   <li>{@code versionAsOf}: Read table at a specific version number
+   *   <li>{@code timestampAsOf}: Read table as it existed at a specific timestamp
+   * </ul>
+   *
+   * <p>If no time travel options are specified, returns the initial (latest) snapshot.
+   *
+   * @param options the merged options containing potential time travel parameters
+   * @return the resolved snapshot (either time-traveled or latest)
+   * @throws IllegalArgumentException if both versionAsOf and timestampAsOf are specified
+   */
+  private Snapshot resolveSnapshot(CaseInsensitiveStringMap options) {
+    boolean hasVersionAsOf = options.containsKey("versionAsOf");
+    boolean hasTimestampAsOf = options.containsKey("timestampAsOf");
+
+    // Cannot specify both
+    if (hasVersionAsOf && hasTimestampAsOf) {
+      throw new IllegalArgumentException(
+          "Cannot specify both 'versionAsOf' and 'timestampAsOf' options");
+    }
+
+    // Handle versionAsOf
+    if (hasVersionAsOf) {
+      long version;
+      try {
+        version = Long.parseLong(options.get("versionAsOf"));
+      } catch (NumberFormatException e) {
+        throw new IllegalArgumentException(
+            "Invalid 'versionAsOf' value: "
+                + options.get("versionAsOf")
+                + ". Must be a valid long integer.",
+            e);
+      }
+
+      if (version < 0) {
+        throw new IllegalArgumentException(
+            "Invalid 'versionAsOf' value: " + version + ". Version must be non-negative.");
+      }
+
+      return snapshotManager.loadSnapshotAt(version);
+    }
+
+    // Handle timestampAsOf
+    if (hasTimestampAsOf) {
+      String timestampStr = options.get("timestampAsOf");
+      long timestampMillis;
+
+      try {
+        // Parse as milliseconds since epoch
+        // TODO: Support ISO-8601 timestamp format (e.g., "2024-01-15T10:30:00Z")
+        timestampMillis = Long.parseLong(timestampStr);
+      } catch (NumberFormatException e) {
+        throw new IllegalArgumentException(
+            "Invalid 'timestampAsOf' value: "
+                + timestampStr
+                + ". Must be epoch milliseconds (e.g., "
+                + System.currentTimeMillis()
+                + ").",
+            e);
+      }
+
+      // Find the commit active at this timestamp
+      io.delta.kernel.internal.DeltaHistoryManager.Commit commit =
+          snapshotManager.getActiveCommitAtTime(
+              timestampMillis,
+              /*canReturnLastCommit=*/ true,
+              /*mustBeRecreatable=*/ true,
+              /*canReturnEarliestCommit=*/ false);
+
+      return snapshotManager.loadSnapshotAt(commit.getVersion());
+    }
+
+    // No time travel: use initial snapshot
+    return initialSnapshot;
   }
 
   @Override
   public String toString() {
     return "SparkTable{identifier=" + identifier + '}';
+  }
+
+  /**
+   * Create a WriteBuilder for batch write operations.
+   *
+   * <p>Uses Kernel's UpdateTableTransactionBuilder to create a transaction for writing data.
+   */
+  @Override
+  public WriteBuilder newWriteBuilder(LogicalWriteInfo info) {
+    // Get the initial snapshot to build transaction from
+    Snapshot snapshot = initialSnapshot;
+
+    // Create UpdateTableTransactionBuilder from snapshot
+    // This is the correct API for updating an existing table
+    io.delta.kernel.transaction.UpdateTableTransactionBuilder txnBuilder =
+        snapshot.buildUpdateTableTransaction(
+            "kernel-spark", // engineInfo
+            Operation.WRITE // operation
+            );
+
+    // Return WriteBuilder that wraps the TransactionBuilder
+    // Pass hadoopConf instead of engine for serialization
+    return new io.delta.kernel.spark.write.SparkWriteBuilder(
+        txnBuilder, hadoopConf, info.schema(), info.queryId());
+  }
+
+  // ========== SupportsDelete Implementation ==========
+
+  /**
+   * Check if we can delete rows matching the given filters.
+   *
+   * <p>For now, we support delete operations without filters (DELETE * FROM table) or metadata-only
+   * deletes. Row-level deletes that require rewriting files are not yet implemented.
+   *
+   * @param filters the filters to check
+   * @return true if delete is supported
+   */
+  @Override
+  public boolean canDeleteWhere(Filter[] filters) {
+    // We support all deletes through Kernel's transaction API
+    // TODO: Check if filters require row-level operations
+    return true;
+  }
+
+  /**
+   * Delete rows from the table that match the given filters.
+   *
+   * <p>Implementation strategy:
+   *
+   * <ol>
+   *   <li>Scan table to find files containing rows matching the filters
+   *   <li>For files that need modification:
+   *       <ul>
+   *         <li>If entire file matches: generate RemoveFile action
+   *         <li>If partial match: rewrite file without matching rows (TODO)
+   *       </ul>
+   *   <li>Commit transaction with all actions
+   * </ol>
+   *
+   * @param filters the filters to match rows for deletion
+   */
+  @Override
+  public void deleteWhere(Filter[] filters) {
+    try {
+      // Step 1: Get all AddFiles via Scan API
+      // TODO: Apply filters to only get matching files
+      Scan scan = initialSnapshot.getScanBuilder().build();
+      CloseableIterator<FilteredColumnarBatch> scanFilesIter = scan.getScanFiles(engine);
+
+      // Step 2: Extract AddFile Rows from scan files
+      List<Row> addFilesList = new ArrayList<>();
+      try {
+        while (scanFilesIter.hasNext()) {
+          FilteredColumnarBatch scanFileBatch = scanFilesIter.next();
+          CloseableIterator<Row> rowsIter = scanFileBatch.getData().getRows();
+
+          try {
+            while (rowsIter.hasNext()) {
+              Row scanFileRow = rowsIter.next();
+              // Get AddFile struct from the scan file row (ordinal 0)
+              if (!scanFileRow.isNullAt(InternalScanFileUtils.ADD_FILE_ORDINAL)) {
+                Row addFileRow = scanFileRow.getStruct(InternalScanFileUtils.ADD_FILE_ORDINAL);
+                if (addFileRow != null) {
+                  addFilesList.add(addFileRow);
+                }
+              }
+            }
+          } finally {
+            rowsIter.close();
+          }
+        }
+      } finally {
+        scanFilesIter.close();
+      }
+
+      // Step 3: Generate DELETE actions from AddFiles
+      CloseableIterator<Row> addFilesIter = Utils.toCloseableIterator(addFilesList.iterator());
+      CloseableIterator<Row> deleteActionsIter =
+          Transaction.generateDeleteActions(engine, addFilesIter);
+
+      // Collect all delete actions
+      List<Row> deleteActionsList = new ArrayList<>();
+      try {
+        while (deleteActionsIter.hasNext()) {
+          deleteActionsList.add(deleteActionsIter.next());
+        }
+      } finally {
+        deleteActionsIter.close();
+      }
+
+      CloseableIterable<Row> deleteActions =
+          CloseableIterable.inMemoryIterable(
+              Utils.toCloseableIterator(deleteActionsList.iterator()));
+
+      // Step 4: Commit transaction
+      io.delta.kernel.transaction.UpdateTableTransactionBuilder txnBuilder =
+          initialSnapshot.buildUpdateTableTransaction("kernel-spark", Operation.WRITE);
+      Transaction txn = txnBuilder.build(engine);
+      txn.commit(engine, deleteActions);
+
+    } catch (Exception e) {
+      throw new RuntimeException("Failed to execute DELETE operation", e);
+    }
+  }
+
+  // ========================================================================================
+  // SupportsRowLevelOperations Implementation (UPDATE/MERGE Support)
+  // ========================================================================================
+
+  @Override
+  public RowLevelOperationBuilder newRowLevelOperationBuilder(RowLevelOperationInfo info) {
+    return new SparkRowLevelOperationBuilder(this, initialSnapshot, engine, hadoopConf, info);
   }
 }
