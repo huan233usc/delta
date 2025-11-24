@@ -119,15 +119,29 @@ public class SparkRowLevelOperation implements RowLevelOperation {
     // Pass scan information for COW operations (to generate RemoveFile actions)
     // Pass hadoopConf instead of engine for serialization
     return new SparkWriteBuilder(
-        txnBuilder, hadoopConf, info.schema(), queryId, configuredScan, engine);
+        txnBuilder, hadoopConf, info.schema(), queryId, configuredScan, engine, snapshot);
   }
 
   @Override
   public NamedReference[] requiredMetadataAttributes() {
-    // For file-level COW, we need the file path metadata column
-    // This allows us to group rows by source file for rewriting
-    return new NamedReference[] {
-      // TODO: Add _metadata.file_path when we support metadata columns
-    };
+    // Check if deletion vectors are enabled for this table
+    io.delta.kernel.internal.SnapshotImpl snapshotImpl =
+        (io.delta.kernel.internal.SnapshotImpl) snapshot;
+    java.util.Map<String, String> tableConfig = snapshotImpl.getMetadata().getConfiguration();
+    String dvEnabled = tableConfig.get("delta.enableDeletionVectors");
+    boolean useDeletionVectors = "true".equalsIgnoreCase(dvEnabled);
+
+    if (useDeletionVectors) {
+      // For DV-based operations, we need file path and row position metadata columns
+      // Following Iceberg's pattern: use simple top-level names (_file, _pos)
+      return new NamedReference[] {
+        org.apache.spark.sql.connector.expressions.FieldReference.apply("_file"),
+        org.apache.spark.sql.connector.expressions.FieldReference.apply("_pos")
+      };
+    } else {
+      // For COW operations, we don't need metadata columns
+      // (file grouping is handled by Spark's partitioning)
+      return new NamedReference[0];
+    }
   }
 }

@@ -354,6 +354,34 @@ class AbstractDeltaCatalog extends DelegatingCatalogExtension
       properties)
   }
 
+  protected def createDeltaTableImpl(      ident: Identifier,
+                                      schema: StructType,
+                                      partitions: Array[Transform],
+                                      properties: util.Map[String, String]): Table = {
+    // TODO: we should extract write options from table properties for all the cases. We
+    //       can remove the UC check when we have confidence.
+    val respectOptions = isUnityCatalog || properties.containsKey("test.simulateUC")
+    val (props, writeOptions) = if (respectOptions) {
+      val (props, writeOptions) = getTablePropsAndWriteOptions(properties)
+      expandTableProps(props, writeOptions, spark.sessionState.conf)
+      props.remove("test.simulateUC")
+      (props, writeOptions)
+    } else {
+      (properties, Map.empty[String, String])
+    }
+
+    createDeltaTable(
+      ident,
+      schema,
+      partitions,
+      props,
+      writeOptions,
+      sourceQuery = None,
+      TableCreationModes.Create
+    )
+
+  }
+
   override def createTable(
       ident: Identifier,
       schema: StructType,
@@ -361,27 +389,7 @@ class AbstractDeltaCatalog extends DelegatingCatalogExtension
       properties: util.Map[String, String]) : Table =
     recordFrameProfile("DeltaCatalog", "createTable") {
       if (DeltaSourceUtils.isDeltaDataSourceName(getProvider(properties))) {
-        // TODO: we should extract write options from table properties for all the cases. We
-        //       can remove the UC check when we have confidence.
-        val respectOptions = isUnityCatalog || properties.containsKey("test.simulateUC")
-        val (props, writeOptions) = if (respectOptions) {
-          val (props, writeOptions) = getTablePropsAndWriteOptions(properties)
-          expandTableProps(props, writeOptions, spark.sessionState.conf)
-          props.remove("test.simulateUC")
-          (props, writeOptions)
-        } else {
-          (properties, Map.empty[String, String])
-        }
-
-        createDeltaTable(
-          ident,
-          schema,
-          partitions,
-          props,
-          writeOptions,
-          sourceQuery = None,
-          TableCreationModes.Create
-        )
+        createDeltaTableImpl(ident, schema, partitions, properties)
       } else {
         createCatalogTable(ident, schema, partitions, properties
         )

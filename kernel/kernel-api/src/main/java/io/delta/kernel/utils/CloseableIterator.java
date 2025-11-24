@@ -268,4 +268,33 @@ public interface CloseableIterator<T> extends Iterator<T>, Closeable {
     }
     return result;
   }
+
+  /**
+   * Create a {@link CloseableIterator} from a standard Java {@link Iterator}.
+   *
+   * <p>The resulting CloseableIterator will simply wrap the provided iterator. Since standard
+   * iterators don't have resources to close, the {@link #close()} method will be a no-op.
+   *
+   * @param iterator The iterator to wrap
+   * @param <T> The type of elements in the iterator
+   * @return A CloseableIterator wrapping the provided iterator
+   */
+  static <T> CloseableIterator<T> fromIterator(Iterator<T> iterator) {
+    return new CloseableIterator<T>() {
+      @Override
+      public boolean hasNext() {
+        return iterator.hasNext();
+      }
+
+      @Override
+      public T next() {
+        return iterator.next();
+      }
+
+      @Override
+      public void close() throws IOException {
+        // No-op: standard iterators don't have resources to close
+      }
+    };
+  }
 }

@@ -79,6 +79,10 @@ public class DeletionVectorDescriptor {
   public static final String INLINE_DV_MARKER = "i";
   public static final String UUID_DV_MARKER = "u";
 
+  /** Empty deletion vector descriptor (no deletions) */
+  public static final DeletionVectorDescriptor EMPTY =
+      new DeletionVectorDescriptor(INLINE_DV_MARKER, "", Optional.empty(), 0, 0);
+
   public static final StructType READ_SCHEMA =
       new StructType()
           .add("storageType", StringType.STRING, false /* nullable*/)
@@ -86,6 +90,39 @@ public class DeletionVectorDescriptor {
           .add("offset", IntegerType.INTEGER, true /* nullable*/)
           .add("sizeInBytes", IntegerType.INTEGER, false /* nullable*/)
           .add("cardinality", LongType.LONG, false /* nullable*/);
+
+  /**
+   * Create an inline deletion vector descriptor.
+   *
+   * @param data The serialized deletion vector data
+   * @param cardinality The number of deleted rows
+   * @return A DeletionVectorDescriptor with the data stored inline
+   */
+  public static DeletionVectorDescriptor inlineInLog(byte[] data, int cardinality) {
+    if (data == null || data.length == 0 || cardinality == 0) {
+      return EMPTY;
+    }
+    String encodedData = Base85Codec.encodeBytes(data);
+    return new DeletionVectorDescriptor(
+        INLINE_DV_MARKER, encodedData, Optional.empty(), data.length, cardinality);
+  }
+
+  /**
+   * Create an on-disk deletion vector descriptor with a relative path.
+   *
+   * @param id The UUID of the deletion vector file
+   * @param randomPrefix The random prefix for the file (for sharding)
+   * @param sizeInBytes The size of the serialized deletion vector in bytes
+   * @param cardinality The number of deleted rows
+   * @param offset The offset within the file (for multiple DVs in one file)
+   * @return A DeletionVectorDescriptor for an on-disk DV
+   */
+  public static DeletionVectorDescriptor onDiskWithRelativePath(
+      UUID id, String randomPrefix, int sizeInBytes, int cardinality, Optional<Integer> offset) {
+    String pathOrInlineDv = randomPrefix + id.toString();
+    return new DeletionVectorDescriptor(
+        UUID_DV_MARKER, pathOrInlineDv, offset, sizeInBytes, cardinality);
+  }
 
   private static final Map<String, Integer> COL_NAME_TO_ORDINAL =
       IntStream.range(0, READ_SCHEMA.length())

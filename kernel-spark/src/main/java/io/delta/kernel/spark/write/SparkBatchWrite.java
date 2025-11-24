@@ -21,12 +21,15 @@ import static io.delta.kernel.internal.util.Utils.toCloseableIterator;
 import io.delta.kernel.Transaction;
 import io.delta.kernel.data.Row;
 import io.delta.kernel.engine.Engine;
+import io.delta.kernel.internal.deletionvectors.RoaringBitmapArray;
 import io.delta.kernel.spark.read.SparkScan;
 import io.delta.kernel.utils.CloseableIterable;
 import io.delta.kernel.utils.CloseableIterator;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import org.apache.spark.sql.connector.write.BatchWrite;
 import org.apache.spark.sql.connector.write.DataWriterFactory;
 import org.apache.spark.sql.connector.write.PhysicalWriteInfo;
@@ -56,7 +59,9 @@ public class SparkBatchWrite implements BatchWrite {
   private final SerializableConfiguration hadoopConf;
   private final StructType sparkSchema;
   private final String queryId;
-  private final SparkScan scanForCOW; // null for regular writes, non-null for COW operations
+  private final SparkScan scanForCOW; // null for regular writes, non-null for COW/DV operations
+  private final boolean useDeletionVectors; // true for DV-based DELETE/UPDATE
+  private final String tablePath; // needed for DV generation
 
   public SparkBatchWrite(
       Transaction transaction,
@@ -64,7 +69,7 @@ public class SparkBatchWrite implements BatchWrite {
       SerializableConfiguration hadoopConf,
       StructType sparkSchema,
       String queryId) {
-    this(transaction, engine, hadoopConf, sparkSchema, queryId, null);
+    this(transaction, engine, hadoopConf, sparkSchema, queryId, null, false, null);
   }
 
   public SparkBatchWrite(
@@ -74,18 +79,39 @@ public class SparkBatchWrite implements BatchWrite {
       StructType sparkSchema,
       String queryId,
       SparkScan scanForCOW) {
+    this(transaction, engine, hadoopConf, sparkSchema, queryId, scanForCOW, false, null);
+  }
+
+  public SparkBatchWrite(
+      Transaction transaction,
+      Engine engine,
+      SerializableConfiguration hadoopConf,
+      StructType sparkSchema,
+      String queryId,
+      SparkScan scanForCOW,
+      boolean useDeletionVectors,
+      String tablePath) {
     this.transaction = transaction;
     this.engine = engine;
     this.hadoopConf = hadoopConf;
     this.sparkSchema = sparkSchema;
     this.queryId = queryId;
     this.scanForCOW = scanForCOW;
+    this.useDeletionVectors = useDeletionVectors;
+    this.tablePath = tablePath;
   }
 
   @Override
   public DataWriterFactory createBatchWriterFactory(PhysicalWriteInfo info) {
-    LOG.info("Creating DataWriterFactory for query: {}", queryId);
+    LOG.info("Creating DataWriterFactory for query: {} (DV mode: {})", queryId, useDeletionVectors);
 
+    // For DV-based DELETE/UPDATE, use a different writer factory
+    if (useDeletionVectors && scanForCOW != null) {
+      LOG.info("Creating SparkDVDataWriterFactory for DV-based operation");
+      return new SparkDVDataWriterFactory(scanForCOW.getScannedAddFiles(), sparkSchema);
+    }
+
+    // For COW-based or regular writes, use the standard data writer factory
     // Extract and wrap transactionState for serialization
     io.delta.kernel.data.Row transactionState = transaction.getTransactionState(engine);
     io.delta.kernel.spark.utils.SerializableKernelRowWrapper transactionStateWrapper =
@@ -123,53 +149,23 @@ public class SparkBatchWrite implements BatchWrite {
   @Override
   public void commit(WriterCommitMessage[] messages) {
     LOG.info(
-        "Committing Delta transaction for query: {} with {} messages", queryId, messages.length);
+        "Committing Delta transaction for query: {} with {} messages (DV mode: {})",
+        queryId,
+        messages.length,
+        useDeletionVectors);
 
     try {
-      // Collect all AddFile actions from executor tasks
-      List<Row> addFileActions = new ArrayList<>();
-      for (WriterCommitMessage message : messages) {
-        SparkWriterCommitMessage msg = (SparkWriterCommitMessage) message;
-        // Each message may contain multiple actions (multiple files written per task)
-        addFileActions.addAll(Arrays.asList(msg.getActions()));
-      }
-
-      LOG.info("Generated {} AddFile actions", addFileActions.size());
-
-      // For COW operations (UPDATE/MERGE): generate RemoveFile actions for replaced files
       List<Row> allActions = new ArrayList<>();
-      if (scanForCOW != null) {
-        LOG.info("COW operation detected - generating RemoveFile actions for replaced files");
 
-        // Get the saved AddFiles from SparkScan (already scanned during read phase)
-        // IMPORTANT: Do NOT call kernelScan.getScanFiles() again - it can only be called once!
-        List<Row> addFilesToDelete = scanForCOW.getScannedAddFiles();
-
-        LOG.info("Found {} AddFiles to delete (from saved scan)", addFilesToDelete.size());
-
-        // Generate RemoveFile actions
-        CloseableIterator<Row> removeFileActions =
-            Transaction.generateDeleteActions(
-                engine, toCloseableIterator(addFilesToDelete.iterator()));
-
-        // Collect RemoveFile actions
-        int removeFileCount = 0;
-        while (removeFileActions.hasNext()) {
-          allActions.add(removeFileActions.next());
-          removeFileCount++;
-        }
-
-        LOG.info("Generated {} RemoveFile actions", removeFileCount);
+      if (useDeletionVectors && scanForCOW != null) {
+        // DV-based DELETE/UPDATE: generate DV actions
+        commitWithDeletionVectors(messages, allActions);
+      } else {
+        // COW-based or regular write: collect AddFile actions and generate RemoveFile actions
+        commitWithCopyOnWrite(messages, allActions);
       }
 
-      // Add the new AddFile actions
-      allActions.addAll(addFileActions);
-
-      LOG.info(
-          "Committing {} total actions ({} remove, {} add)",
-          allActions.size(),
-          allActions.size() - addFileActions.size(),
-          addFileActions.size());
+      LOG.info("Committing {} total actions", allActions.size());
 
       // Create a CloseableIterable from the actions list
       CloseableIterable<Row> dataActions =
@@ -183,6 +179,130 @@ public class SparkBatchWrite implements BatchWrite {
       LOG.error("Failed to commit Delta transaction for query: {}", queryId, e);
       throw new RuntimeException("Failed to commit Delta transaction", e);
     }
+  }
+
+  /**
+   * Commit using Copy-on-Write approach.
+   *
+   * <p>This is used for: - Regular writes (INSERT, CTAS) - COW-based DELETE/UPDATE (when DV is
+   * disabled)
+   */
+  private void commitWithCopyOnWrite(WriterCommitMessage[] messages, List<Row> allActions) {
+    // Collect all AddFile actions from executor tasks
+    List<Row> addFileActions = new ArrayList<>();
+    for (WriterCommitMessage message : messages) {
+      SparkWriterCommitMessage msg = (SparkWriterCommitMessage) message;
+      // Each message may contain multiple actions (multiple files written per task)
+      addFileActions.addAll(Arrays.asList(msg.getActions()));
+    }
+
+    LOG.info("Generated {} AddFile actions", addFileActions.size());
+
+    // For COW operations (UPDATE/MERGE): generate RemoveFile actions for replaced files
+    if (scanForCOW != null) {
+      LOG.info("COW operation detected - generating RemoveFile actions for replaced files");
+
+      // Get the saved AddFiles from SparkScan (already scanned during read phase)
+      // IMPORTANT: Do NOT call kernelScan.getScanFiles() again - it can only be called once!
+      List<io.delta.kernel.spark.utils.SerializableKernelRowWrapper> addFilesToDeleteWrapped =
+          scanForCOW.getScannedAddFiles();
+
+      LOG.info("Found {} AddFiles to delete (from saved scan)", addFilesToDeleteWrapped.size());
+
+      // Unwrap the serializable wrappers to get the actual Row objects
+      List<Row> addFilesToDelete = new ArrayList<>();
+      for (io.delta.kernel.spark.utils.SerializableKernelRowWrapper wrapper :
+          addFilesToDeleteWrapped) {
+        addFilesToDelete.add(wrapper.getRow());
+      }
+
+      // Generate RemoveFile actions
+      CloseableIterator<Row> removeFileActions =
+          Transaction.generateDeleteActions(
+              engine, toCloseableIterator(addFilesToDelete.iterator()));
+
+      // Collect RemoveFile actions
+      int removeFileCount = 0;
+      while (removeFileActions.hasNext()) {
+        allActions.add(removeFileActions.next());
+        removeFileCount++;
+      }
+
+      LOG.info("Generated {} RemoveFile actions", removeFileCount);
+    }
+
+    // Add the new AddFile actions
+    allActions.addAll(addFileActions);
+  }
+
+  /**
+   * Commit using Deletion Vectors approach.
+   *
+   * <p>This is used for DV-based DELETE/UPDATE operations. Instead of rewriting files, we generate
+   * deletion vectors that mark which rows are deleted.
+   */
+  private void commitWithDeletionVectors(WriterCommitMessage[] messages, List<Row> allActions)
+      throws java.io.IOException {
+    LOG.info("DV-based operation - generating deletion vector actions");
+
+    // Collect deleted rows by file path from all executor tasks
+    Map<String, RoaringBitmapArray> allDeletedRowsByFilePath = new HashMap<>();
+    Map<String, Row> allAddFilesByPath = new HashMap<>();
+
+    for (WriterCommitMessage message : messages) {
+      SparkDVCommitMessage dvMsg = (SparkDVCommitMessage) message;
+
+      // Merge deleted rows from this task
+      for (Map.Entry<String, RoaringBitmapArray> entry :
+          dvMsg.getDeletedRowsByFilePath().entrySet()) {
+        String filePath = entry.getKey();
+        RoaringBitmapArray deletedRows = entry.getValue();
+
+        RoaringBitmapArray existing = allDeletedRowsByFilePath.get(filePath);
+        if (existing == null) {
+          allDeletedRowsByFilePath.put(filePath, deletedRows);
+        } else {
+          // Merge bitmaps
+          for (long rowIndex : deletedRows.toArray()) {
+            existing.add(rowIndex);
+          }
+        }
+      }
+
+      // Collect AddFile rows
+      allAddFilesByPath.putAll(dvMsg.getAddFilesByPath());
+    }
+
+    LOG.info(
+        "Collected deleted rows for {} files, total rows deleted: {}",
+        allDeletedRowsByFilePath.size(),
+        allDeletedRowsByFilePath.values().stream()
+            .mapToLong(RoaringBitmapArray::cardinality)
+            .sum());
+
+    // Generate DV actions using Kernel API
+    Map<Row, RoaringBitmapArray> filesToUpdate = new HashMap<>();
+    for (Map.Entry<String, RoaringBitmapArray> entry : allDeletedRowsByFilePath.entrySet()) {
+      String filePath = entry.getKey();
+      Row addFileRow = allAddFilesByPath.get(filePath);
+      if (addFileRow != null) {
+        filesToUpdate.put(addFileRow, entry.getValue());
+      } else {
+        LOG.warn("No AddFile found for file path: {}", filePath);
+      }
+    }
+
+    CloseableIterator<Row> dvActions =
+        Transaction.generateDeletionVectorActions(engine, filesToUpdate, tablePath);
+
+    // Collect all DV actions (RemoveFile + AddFile with DV)
+    int dvActionCount = 0;
+    while (dvActions.hasNext()) {
+      allActions.add(dvActions.next());
+      dvActionCount++;
+    }
+
+    LOG.info("Generated {} DV actions ({} files updated)", dvActionCount, filesToUpdate.size());
   }
 
   @Override

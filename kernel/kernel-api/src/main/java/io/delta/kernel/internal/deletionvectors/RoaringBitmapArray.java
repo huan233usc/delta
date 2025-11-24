@@ -96,6 +96,45 @@ public final class RoaringBitmapArray {
     return bitmap;
   }
 
+  /**
+   * Serialize this RoaringBitmapArray to bytes using the Portable format. This is the inverse of
+   * {@link #readFrom(byte[])}.
+   *
+   * @return Serialized bytes in Portable format
+   */
+  public byte[] serializeToBytes() throws IOException {
+    // Calculate total size needed
+    int totalSize = 4 + 8; // magic number + number of bitmaps
+    int nonEmptyBitmaps = 0;
+
+    for (int i = 0; i < bitmaps.length; i++) {
+      if (!bitmaps[i].isEmpty()) {
+        nonEmptyBitmaps++;
+        totalSize += 4; // key (4 bytes)
+        totalSize += bitmaps[i].serializedSizeInBytes(); // bitmap data
+      }
+    }
+
+    ByteBuffer buffer = ByteBuffer.allocate(totalSize);
+    buffer.order(ByteOrder.LITTLE_ENDIAN);
+
+    // Write magic number
+    buffer.putInt(PortableRoaringBitmapArraySerializationFormat.MAGIC_NUMBER);
+
+    // Write number of non-empty bitmaps
+    buffer.putLong(nonEmptyBitmaps);
+
+    // Write each non-empty bitmap
+    for (int i = 0; i < bitmaps.length; i++) {
+      if (!bitmaps[i].isEmpty()) {
+        buffer.putInt(i); // key (upper 32 bits)
+        bitmaps[i].serialize(buffer);
+      }
+    }
+
+    return buffer.array();
+  }
+
   ////////////////////////////////////////////////////////////////////////////////
   // Instance Fields / Methods
   ////////////////////////////////////////////////////////////////////////////////
@@ -139,6 +178,19 @@ public final class RoaringBitmapArray {
       int low = lowBytes(value);
       return highBitmap.contains(low);
     }
+  }
+
+  /**
+   * Get the total number of values in this bitmap.
+   *
+   * @return The cardinality (number of set bits) across all bitmaps
+   */
+  public long cardinality() {
+    long total = 0;
+    for (RoaringBitmap bitmap : bitmaps) {
+      total += bitmap.getLongCardinality();
+    }
+    return total;
   }
 
   ////////////////////////////////////////////////////////////////////////////////

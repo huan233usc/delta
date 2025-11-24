@@ -1,5 +1,5 @@
 /*
- * Copyright (2023) The Delta Lake Project Authors.
+ * Copyright (2024) The Delta Lake Project Authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,23 +16,84 @@
 
 package io.delta.kernel.internal.deletionvectors;
 
-import io.delta.kernel.engine.Engine;
 import io.delta.kernel.internal.actions.DeletionVectorDescriptor;
-import io.delta.kernel.internal.util.Tuple2;
 import java.io.IOException;
-import java.util.Optional;
 
-/** Utility methods regarding deletion vectors. */
+/**
+ * Utility methods for working with Deletion Vectors.
+ *
+ * <p>This class provides helper methods for creating inline deletion vectors from
+ * RoaringBitmapArray instances.
+ */
 public class DeletionVectorUtils {
-  public static Tuple2<DeletionVectorDescriptor, RoaringBitmapArray> loadNewDvAndBitmap(
-      Engine engine, String tablePath, DeletionVectorDescriptor dv) {
-    DeletionVectorStoredBitmap storedBitmap =
-        new DeletionVectorStoredBitmap(dv, Optional.of(tablePath));
-    try {
-      RoaringBitmapArray bitmap = storedBitmap.load(engine.getFileSystemClient());
-      return new Tuple2<>(dv, bitmap);
-    } catch (IOException e) {
-      throw new RuntimeException("Couldn't load dv", e);
+
+  /**
+   * Create an inline deletion vector descriptor from a RoaringBitmapArray.
+   *
+   * <p>This method serializes the bitmap and stores it inline in the log. This is suitable for
+   * small deletion vectors (typically < 10KB).
+   *
+   * @param bitmap The RoaringBitmapArray containing the deleted row indices
+   * @return A DeletionVectorDescriptor with the serialized bitmap stored inline
+   * @throws IOException If serialization fails
+   */
+  public static DeletionVectorDescriptor createInlineDV(RoaringBitmapArray bitmap)
+      throws IOException {
+    if (bitmap.cardinality() == 0) {
+      return DeletionVectorDescriptor.EMPTY;
     }
+
+    byte[] serializedBitmap = bitmap.serializeToBytes();
+    return DeletionVectorDescriptor.inlineInLog(serializedBitmap, (int) bitmap.cardinality());
+  }
+
+  /**
+   * Merge an existing deletion vector with new deletions and create a new inline DV.
+   *
+   * @param existingDv The existing deletion vector descriptor (may be null or empty)
+   * @param newDeletions The new deletions to add
+   * @param tableDataPath The table data path (required if existingDv is on-disk)
+   * @param fileSystemClient The file system client (required if existingDv is on-disk)
+   * @return A new inline DeletionVectorDescriptor with the merged result
+   * @throws IOException If reading or serialization fails
+   */
+  public static DeletionVectorDescriptor mergeAndCreateInlineDV(
+      DeletionVectorDescriptor existingDv,
+      RoaringBitmapArray newDeletions,
+      String tableDataPath,
+      io.delta.kernel.engine.FileSystemClient fileSystemClient)
+      throws IOException {
+
+    if (existingDv == null || existingDv.getCardinality() == 0) {
+      // No existing DV, just create from new deletions
+      return createInlineDV(newDeletions);
+    }
+
+    if (newDeletions.cardinality() == 0) {
+      // No new deletions, return existing (but convert to inline if it's on-disk)
+      if (existingDv.isInline()) {
+        return existingDv;
+      } else {
+        // Load on-disk DV and convert to inline
+        DeletionVectorStoredBitmap storedBitmap =
+            new DeletionVectorStoredBitmap(
+                existingDv, java.util.Optional.ofNullable(tableDataPath));
+        RoaringBitmapArray existingBitmap = storedBitmap.load(fileSystemClient);
+        return createInlineDV(existingBitmap);
+      }
+    }
+
+    // Load existing DV
+    DeletionVectorStoredBitmap storedBitmap =
+        new DeletionVectorStoredBitmap(existingDv, java.util.Optional.ofNullable(tableDataPath));
+    RoaringBitmapArray existingBitmap = storedBitmap.load(fileSystemClient);
+
+    // Merge with new deletions
+    for (long value : newDeletions.toArray()) {
+      existingBitmap.add(value);
+    }
+
+    // Create inline DV from merged bitmap
+    return createInlineDV(existingBitmap);
   }
 }

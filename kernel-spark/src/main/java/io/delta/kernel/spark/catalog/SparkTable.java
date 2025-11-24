@@ -19,20 +19,12 @@ import static io.delta.kernel.spark.utils.ScalaUtils.toScalaMap;
 import static java.util.Objects.requireNonNull;
 
 import io.delta.kernel.Operation;
-import io.delta.kernel.Scan;
 import io.delta.kernel.Snapshot;
-import io.delta.kernel.Transaction;
-import io.delta.kernel.data.FilteredColumnarBatch;
-import io.delta.kernel.data.Row;
-import io.delta.kernel.internal.InternalScanFileUtils;
-import io.delta.kernel.internal.util.Utils;
 import io.delta.kernel.spark.read.SparkScanBuilder;
 import io.delta.kernel.spark.snapshot.DeltaSnapshotManager;
 import io.delta.kernel.spark.snapshot.PathBasedSnapshotManager;
 import io.delta.kernel.spark.utils.SchemaUtils;
 import io.delta.kernel.spark.write.SparkRowLevelOperationBuilder;
-import io.delta.kernel.utils.CloseableIterable;
-import io.delta.kernel.utils.CloseableIterator;
 import java.util.*;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.spark.sql.SparkSession;
@@ -46,23 +38,24 @@ import org.apache.spark.sql.connector.write.RowLevelOperationBuilder;
 import org.apache.spark.sql.connector.write.RowLevelOperationInfo;
 import org.apache.spark.sql.connector.write.WriteBuilder;
 import org.apache.spark.sql.delta.DeltaTableUtils;
-import org.apache.spark.sql.sources.Filter;
 import org.apache.spark.sql.types.StructField;
 import org.apache.spark.sql.types.StructType;
 import org.apache.spark.sql.util.CaseInsensitiveStringMap;
 
 /** DataSource V2 Table implementation for Delta Lake using the Delta Kernel API. */
 public class SparkTable
-    implements Table, SupportsRead, SupportsWrite, SupportsDelete, SupportsRowLevelOperations {
+    implements Table,
+        SupportsRead,
+        SupportsWrite,
+        SupportsRowLevelOperations,
+        org.apache.spark.sql.connector.catalog.SupportsMetadataColumns {
 
   private static final Set<TableCapability> CAPABILITIES =
       Collections.unmodifiableSet(
           EnumSet.of(
               TableCapability.BATCH_READ,
               TableCapability.MICRO_BATCH_READ,
-              TableCapability.BATCH_WRITE,
-              TableCapability.TRUNCATE,
-              TableCapability.OVERWRITE_BY_FILTER));
+              TableCapability.BATCH_WRITE));
 
   private final Identifier identifier;
   private final String tablePath;
@@ -225,6 +218,16 @@ public class SparkTable
   /** Returns the snapshot manager for this table. */
   public DeltaSnapshotManager snapshotManager() {
     return snapshotManager;
+  }
+
+  /** Returns the initial snapshot for this table. */
+  public Snapshot initialSnapshot() {
+    return initialSnapshot;
+  }
+
+  /** Returns the table path. */
+  public String tablePath() {
+    return tablePath;
   }
 
   /** Returns the data schema (non-partition columns). */
@@ -459,100 +462,75 @@ public class SparkTable
    * @param filters the filters to check
    * @return true if delete is supported
    */
-  @Override
-  public boolean canDeleteWhere(Filter[] filters) {
-    // We support all deletes through Kernel's transaction API
-    // TODO: Check if filters require row-level operations
-    return true;
-  }
-
-  /**
-   * Delete rows from the table that match the given filters.
-   *
-   * <p>Implementation strategy:
-   *
-   * <ol>
-   *   <li>Scan table to find files containing rows matching the filters
-   *   <li>For files that need modification:
-   *       <ul>
-   *         <li>If entire file matches: generate RemoveFile action
-   *         <li>If partial match: rewrite file without matching rows (TODO)
-   *       </ul>
-   *   <li>Commit transaction with all actions
-   * </ol>
-   *
-   * @param filters the filters to match rows for deletion
-   */
-  @Override
-  public void deleteWhere(Filter[] filters) {
-    try {
-      // Step 1: Get all AddFiles via Scan API
-      // TODO: Apply filters to only get matching files
-      Scan scan = initialSnapshot.getScanBuilder().build();
-      CloseableIterator<FilteredColumnarBatch> scanFilesIter = scan.getScanFiles(engine);
-
-      // Step 2: Extract AddFile Rows from scan files
-      List<Row> addFilesList = new ArrayList<>();
-      try {
-        while (scanFilesIter.hasNext()) {
-          FilteredColumnarBatch scanFileBatch = scanFilesIter.next();
-          CloseableIterator<Row> rowsIter = scanFileBatch.getData().getRows();
-
-          try {
-            while (rowsIter.hasNext()) {
-              Row scanFileRow = rowsIter.next();
-              // Get AddFile struct from the scan file row (ordinal 0)
-              if (!scanFileRow.isNullAt(InternalScanFileUtils.ADD_FILE_ORDINAL)) {
-                Row addFileRow = scanFileRow.getStruct(InternalScanFileUtils.ADD_FILE_ORDINAL);
-                if (addFileRow != null) {
-                  addFilesList.add(addFileRow);
-                }
-              }
-            }
-          } finally {
-            rowsIter.close();
-          }
-        }
-      } finally {
-        scanFilesIter.close();
-      }
-
-      // Step 3: Generate DELETE actions from AddFiles
-      CloseableIterator<Row> addFilesIter = Utils.toCloseableIterator(addFilesList.iterator());
-      CloseableIterator<Row> deleteActionsIter =
-          Transaction.generateDeleteActions(engine, addFilesIter);
-
-      // Collect all delete actions
-      List<Row> deleteActionsList = new ArrayList<>();
-      try {
-        while (deleteActionsIter.hasNext()) {
-          deleteActionsList.add(deleteActionsIter.next());
-        }
-      } finally {
-        deleteActionsIter.close();
-      }
-
-      CloseableIterable<Row> deleteActions =
-          CloseableIterable.inMemoryIterable(
-              Utils.toCloseableIterator(deleteActionsList.iterator()));
-
-      // Step 4: Commit transaction
-      io.delta.kernel.transaction.UpdateTableTransactionBuilder txnBuilder =
-          initialSnapshot.buildUpdateTableTransaction("kernel-spark", Operation.WRITE);
-      Transaction txn = txnBuilder.build(engine);
-      txn.commit(engine, deleteActions);
-
-    } catch (Exception e) {
-      throw new RuntimeException("Failed to execute DELETE operation", e);
-    }
-  }
-
   // ========================================================================================
-  // SupportsRowLevelOperations Implementation (UPDATE/MERGE Support)
+  // SupportsRowLevelOperations Implementation (DELETE/UPDATE/MERGE Support)
   // ========================================================================================
 
   @Override
   public RowLevelOperationBuilder newRowLevelOperationBuilder(RowLevelOperationInfo info) {
     return new SparkRowLevelOperationBuilder(this, initialSnapshot, engine, hadoopConf, info);
+  }
+
+  // ========================================================================================
+  // SupportsMetadataColumns Implementation (for DV-based DELETE/UPDATE)
+  // ========================================================================================
+
+  /**
+   * Define metadata columns that can be used in DV-based DELETE/UPDATE operations.
+   *
+   * <p>These columns are automatically added by Spark when reading data and can be used to identify
+   * which rows in which files should be deleted.
+   *
+   * <p>Supported metadata columns: - `_metadata.file_path`: The path of the file containing the row
+   * - `_metadata.file_row_index`: The row index within that file (0-based)
+   */
+  @Override
+  public org.apache.spark.sql.connector.catalog.MetadataColumn[] metadataColumns() {
+    return new org.apache.spark.sql.connector.catalog.MetadataColumn[] {
+      // File path metadata column (following Iceberg's naming: _file)
+      new org.apache.spark.sql.connector.catalog.MetadataColumn() {
+        @Override
+        public String name() {
+          return "_file";
+        }
+
+        @Override
+        public org.apache.spark.sql.types.DataType dataType() {
+          return org.apache.spark.sql.types.DataTypes.StringType;
+        }
+
+        @Override
+        public boolean isNullable() {
+          return false;
+        }
+
+        @Override
+        public String comment() {
+          return "Path of the file in which a row is stored";
+        }
+      },
+      // Row position metadata column (following Iceberg's naming: _pos)
+      new org.apache.spark.sql.connector.catalog.MetadataColumn() {
+        @Override
+        public String name() {
+          return "_pos";
+        }
+
+        @Override
+        public org.apache.spark.sql.types.DataType dataType() {
+          return org.apache.spark.sql.types.DataTypes.LongType;
+        }
+
+        @Override
+        public boolean isNullable() {
+          return false;
+        }
+
+        @Override
+        public String comment() {
+          return "Ordinal position of a row in the source data file";
+        }
+      }
+    };
   }
 }

@@ -54,6 +54,7 @@ import scala.collection.JavaConverters;
 /** Spark DSV2 Scan implementation backed by Delta Kernel. */
 public class SparkScan implements Scan, SupportsReportStatistics, SupportsRuntimeV2Filtering {
 
+  private final io.delta.kernel.Snapshot initialSnapshot;
   private final DeltaSnapshotManager snapshotManager;
   private final StructType readDataSchema;
   private final StructType dataSchema;
@@ -73,9 +74,12 @@ public class SparkScan implements Scan, SupportsReportStatistics, SupportsRuntim
   private volatile boolean planned = false;
 
   // For COW operations: store AddFile Rows to generate RemoveFile actions later
-  private List<io.delta.kernel.data.Row> scannedAddFiles = new ArrayList<>();
+  // Using SerializableKernelRowWrapper to ensure they can be serialized to executors
+  private List<io.delta.kernel.spark.utils.SerializableKernelRowWrapper> scannedAddFiles =
+      new ArrayList<>();
 
   public SparkScan(
+      io.delta.kernel.Snapshot initialSnapshot,
       DeltaSnapshotManager snapshotManager,
       StructType dataSchema,
       StructType partitionSchema,
@@ -85,6 +89,7 @@ public class SparkScan implements Scan, SupportsReportStatistics, SupportsRuntim
       io.delta.kernel.Scan kernelScan,
       CaseInsensitiveStringMap options) {
 
+    this.initialSnapshot = Objects.requireNonNull(initialSnapshot, "initialSnapshot is null");
     this.snapshotManager = Objects.requireNonNull(snapshotManager, "snapshotManager is null");
     this.dataSchema = Objects.requireNonNull(dataSchema, "dataSchema is null");
     this.partitionSchema = Objects.requireNonNull(partitionSchema, "partitionSchema is null");
@@ -131,8 +136,10 @@ public class SparkScan implements Scan, SupportsReportStatistics, SupportsRuntim
    *
    * <p>IMPORTANT: This list is only populated during scan planning. Call {@link #ensurePlanned()}
    * before accessing this list.
+   *
+   * <p>Returns serializable wrappers to allow these rows to be sent to executors.
    */
-  public List<io.delta.kernel.data.Row> getScannedAddFiles() {
+  public List<io.delta.kernel.spark.utils.SerializableKernelRowWrapper> getScannedAddFiles() {
     ensurePlanned();
     return scannedAddFiles;
   }
@@ -150,7 +157,8 @@ public class SparkScan implements Scan, SupportsReportStatistics, SupportsRuntim
         dataFilters,
         totalBytes,
         scalaOptions,
-        hadoopConf);
+        hadoopConf,
+        initialSnapshot);
   }
 
   @Override
@@ -193,7 +201,7 @@ public class SparkScan implements Scan, SupportsReportStatistics, SupportsRuntim
    *
    * @return the table path with trailing slash
    */
-  private String getTablePath() {
+  public String getTablePath() {
     final Engine tableEngine = DefaultEngine.create(hadoopConf);
     final Row scanState = kernelScan.getScanState(tableEngine);
     final String tableRoot = ScanStateRow.getTableRoot(scanState).toUri().toString();
@@ -262,7 +270,9 @@ public class SparkScan implements Scan, SupportsReportStatistics, SupportsRuntim
 
           // Save AddFile Row for COW operations (UPDATE/MERGE)
           // This is needed to generate RemoveFile actions later
-          scannedAddFiles.add(row.getStruct(0));
+          // Wrap in SerializableKernelRowWrapper to ensure it can be serialized
+          scannedAddFiles.add(
+              new io.delta.kernel.spark.utils.SerializableKernelRowWrapper(row.getStruct(0)));
 
           final PartitionedFile partitionedFile =
               new PartitionedFile(

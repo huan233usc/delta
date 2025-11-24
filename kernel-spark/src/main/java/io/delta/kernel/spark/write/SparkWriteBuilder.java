@@ -40,13 +40,14 @@ public class SparkWriteBuilder implements WriteBuilder {
   private final String queryId;
   private final SparkScan scanForCOW;
   private final Engine engine;
+  private final io.delta.kernel.Snapshot initialSnapshot;
 
   public SparkWriteBuilder(
       UpdateTableTransactionBuilder txnBuilder,
       Configuration hadoopConf,
       StructType sparkSchema,
       String queryId) {
-    this(txnBuilder, hadoopConf, sparkSchema, queryId, null, null);
+    this(txnBuilder, hadoopConf, sparkSchema, queryId, null, null, null);
   }
 
   public SparkWriteBuilder(
@@ -56,17 +57,30 @@ public class SparkWriteBuilder implements WriteBuilder {
       String queryId,
       SparkScan scanForCOW,
       Engine engine) {
+    this(txnBuilder, hadoopConf, sparkSchema, queryId, scanForCOW, engine, null);
+  }
+
+  public SparkWriteBuilder(
+      UpdateTableTransactionBuilder txnBuilder,
+      Configuration hadoopConf,
+      StructType sparkSchema,
+      String queryId,
+      SparkScan scanForCOW,
+      Engine engine,
+      io.delta.kernel.Snapshot initialSnapshot) {
     this.txnBuilder = txnBuilder;
     this.hadoopConf = hadoopConf;
     this.sparkSchema = sparkSchema;
     this.queryId = queryId;
     this.scanForCOW = scanForCOW;
     this.engine = engine;
+    this.initialSnapshot = initialSnapshot;
   }
 
   @Override
   public Write build() {
-    return new SparkWrite(txnBuilder, hadoopConf, sparkSchema, queryId, scanForCOW, engine);
+    return new SparkWrite(
+        txnBuilder, hadoopConf, sparkSchema, queryId, scanForCOW, engine, initialSnapshot);
   }
 
   /** Internal Write implementation that creates the actual BatchWrite. */
@@ -77,6 +91,7 @@ public class SparkWriteBuilder implements WriteBuilder {
     private final String queryId;
     private final SparkScan scanForCOW;
     private final Engine engineForCOW;
+    private final io.delta.kernel.Snapshot initialSnapshot;
 
     public SparkWrite(
         UpdateTableTransactionBuilder txnBuilder,
@@ -84,13 +99,15 @@ public class SparkWriteBuilder implements WriteBuilder {
         StructType sparkSchema,
         String queryId,
         SparkScan scanForCOW,
-        Engine engineForCOW) {
+        Engine engineForCOW,
+        io.delta.kernel.Snapshot initialSnapshot) {
       this.txnBuilder = txnBuilder;
       this.hadoopConf = hadoopConf;
       this.sparkSchema = sparkSchema;
       this.queryId = queryId;
       this.scanForCOW = scanForCOW;
       this.engineForCOW = engineForCOW;
+      this.initialSnapshot = initialSnapshot;
     }
 
     @Override
@@ -101,8 +118,32 @@ public class SparkWriteBuilder implements WriteBuilder {
       Transaction transaction = txnBuilder.build(engine);
       // Wrap hadoopConf in SerializableConfiguration for serialization to executors
       SerializableConfiguration serializableConf = new SerializableConfiguration(hadoopConf);
+
+      // Check if deletion vectors are enabled for this table
+      boolean useDeletionVectors = false;
+      String tablePath = null;
+      if (scanForCOW != null && initialSnapshot != null) {
+        // Check table property: delta.enableDeletionVectors
+        java.util.Map<String, String> tableConfig =
+            ((io.delta.kernel.internal.SnapshotImpl) initialSnapshot)
+                .getMetadata()
+                .getConfiguration();
+        String dvEnabled = tableConfig.get("delta.enableDeletionVectors");
+        useDeletionVectors = "true".equalsIgnoreCase(dvEnabled);
+
+        // Get table path for DV generation
+        tablePath = scanForCOW.getTablePath();
+      }
+
       return new SparkBatchWrite(
-          transaction, engine, serializableConf, sparkSchema, queryId, scanForCOW);
+          transaction,
+          engine,
+          serializableConf,
+          sparkSchema,
+          queryId,
+          scanForCOW,
+          useDeletionVectors,
+          tablePath);
     }
   }
 }

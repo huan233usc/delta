@@ -308,6 +308,81 @@ public interface Transaction {
   }
 
   /**
+   * Generate AddFile and RemoveFile actions for DML operations (DELETE/UPDATE) using Deletion
+   * Vectors. This method creates a new AddFile with an inline deletion vector and a corresponding
+   * RemoveFile for the old version of the file.
+   *
+   * <p>This is an alternative to {@link #generateDeleteActions} that uses Deletion Vectors instead
+   * of physically removing files. This approach is more efficient for small deletes as it avoids
+   * rewriting entire data files.
+   *
+   * <p><b>Usage Example:</b>
+   *
+   * <pre>{@code
+   * // 1. Scan the table to find files matching the delete predicate
+   * // and collect row indices to delete per file
+   * Map<Row, RoaringBitmapArray> filesToUpdate = ...; // AddFile -> deleted row indices
+   *
+   * // 2. Generate AddFile (with DV) and RemoveFile actions
+   * CloseableIterator<Row> dvActions = Transaction.generateDeletionVectorActions(
+   *     engine, filesToUpdate, tableDataPath);
+   *
+   * // 3. Commit the transaction
+   * transaction.commit(engine, CloseableIterable.inMemoryIterable(dvActions));
+   * }</pre>
+   *
+   * @param engine {@link Engine} instance to use for file system operations
+   * @param filesToUpdate Map from AddFile rows to RoaringBitmapArray containing the row indices to
+   *     delete. The AddFile rows should be obtained from scanning the table.
+   * @param tableDataPath The data path of the Delta table (required for loading existing DVs)
+   * @return {@link CloseableIterator} of {@link Row} representing both RemoveFile and AddFile
+   *     actions (with DVs) to commit using {@link Transaction#commit}. Each input AddFile will
+   *     produce two actions: one RemoveFile (for the old version) and one AddFile (with the new
+   *     DV).
+   * @throws IOException If reading existing DVs or creating new DVs fails
+   * @since 3.4.0
+   */
+  static CloseableIterator<Row> generateDeletionVectorActions(
+      Engine engine,
+      java.util.Map<Row, io.delta.kernel.internal.deletionvectors.RoaringBitmapArray> filesToUpdate,
+      String tableDataPath)
+      throws java.io.IOException {
+    long deletionTimestamp = System.currentTimeMillis();
+    java.util.List<Row> actions = new java.util.ArrayList<>();
+
+    for (java.util.Map.Entry<Row, io.delta.kernel.internal.deletionvectors.RoaringBitmapArray>
+        entry : filesToUpdate.entrySet()) {
+      Row addFileRow = entry.getKey();
+      io.delta.kernel.internal.deletionvectors.RoaringBitmapArray newDeletions = entry.getValue();
+
+      io.delta.kernel.internal.actions.AddFile addFile =
+          new io.delta.kernel.internal.actions.AddFile(addFileRow);
+
+      // Merge existing DV (if any) with new deletions
+      io.delta.kernel.internal.actions.DeletionVectorDescriptor newDv =
+          io.delta.kernel.internal.deletionvectors.DeletionVectorUtils.mergeAndCreateInlineDV(
+              addFile.getDeletionVector().orElse(null),
+              newDeletions,
+              tableDataPath,
+              engine.getFileSystemClient());
+
+      // Generate RemoveFile for the old version
+      Row removeFileRow =
+          addFile.toRemoveFileRow(true /* dataChange */, java.util.Optional.of(deletionTimestamp));
+      actions.add(
+          io.delta.kernel.internal.actions.SingleAction.createRemoveFileSingleAction(
+              removeFileRow));
+
+      // Generate AddFile with the new DV
+      Row newAddFileRow = addFile.copyWithDeletionVector(newDv, true /* dataChange */);
+      actions.add(
+          io.delta.kernel.internal.actions.SingleAction.createAddFileSingleAction(newAddFileRow));
+    }
+
+    return io.delta.kernel.utils.CloseableIterator.fromIterator(actions.iterator());
+  }
+
+  /**
    * For given data files, generate Delta actions that can be committed in a transaction. These data
    * files are the result of writing the data returned by {@link Transaction#transformLogicalData}
    * with the context returned by {@link Transaction#getWriteContext}.

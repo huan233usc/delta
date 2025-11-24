@@ -281,6 +281,44 @@ public class AddFile extends RowBackedAction {
     return new GenericRow(RemoveFile.FULL_SCHEMA, fieldMap);
   }
 
+  /**
+   * Create a new AddFile row with an updated deletion vector. This is used for DML operations
+   * (DELETE/UPDATE) that use deletion vectors instead of physically removing files.
+   *
+   * <p>The returned row will have the same path, partition values, size, and other metadata as the
+   * original AddFile, but with the specified deletion vector.
+   *
+   * @param deletionVector The new deletion vector descriptor to use
+   * @param dataChange whether this AddFile represents a data change
+   * @return A new AddFile row with the updated deletion vector
+   */
+  public Row copyWithDeletionVector(DeletionVectorDescriptor deletionVector, boolean dataChange) {
+    Map<Integer, Object> fieldMap = new HashMap<>();
+    fieldMap.put(FULL_SCHEMA.indexOf("path"), getPath());
+    fieldMap.put(FULL_SCHEMA.indexOf("partitionValues"), getPartitionValues());
+    fieldMap.put(FULL_SCHEMA.indexOf("size"), getSize());
+    fieldMap.put(FULL_SCHEMA.indexOf("modificationTime"), getModificationTime());
+    fieldMap.put(FULL_SCHEMA.indexOf("dataChange"), dataChange);
+
+    // Set the new deletion vector
+    if (deletionVector != null && deletionVector.getCardinality() > 0) {
+      fieldMap.put(FULL_SCHEMA.indexOf("deletionVector"), deletionVector.toRow());
+    }
+
+    // Copy optional fields
+    getTags().ifPresent(tags -> fieldMap.put(FULL_SCHEMA.indexOf("tags"), tags));
+    getBaseRowId()
+        .ifPresent(baseRowId -> fieldMap.put(FULL_SCHEMA.indexOf("baseRowId"), baseRowId));
+    getDefaultRowCommitVersion()
+        .ifPresent(
+            defaultRowCommitVersion ->
+                fieldMap.put(
+                    FULL_SCHEMA.indexOf("defaultRowCommitVersion"), defaultRowCommitVersion));
+    getStatsJson().ifPresent(statsJson -> fieldMap.put(FULL_SCHEMA.indexOf("stats"), statsJson));
+
+    return new GenericRow(FULL_SCHEMA, fieldMap);
+  }
+
   @Override
   public String toString() {
     // No specific ordering is guaranteed for partitionValues and tags in the returned string
