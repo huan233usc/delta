@@ -625,10 +625,10 @@ public class SparkGoldenTableTest extends QueryTest {
           new Function0<Dataset<Row>>() {
             @Override
             public Dataset<Row> apply() {
-              return df;
+              return df2;
             }
           },
-          df2);
+          df);
     }
   }
 

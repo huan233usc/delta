@@ -16,7 +16,6 @@
 package io.delta.kernel.spark.read;
 
 import java.io.IOException;
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 import org.apache.hadoop.mapreduce.InputSplit;
@@ -39,7 +38,6 @@ public class DVFilteringRecordReader extends RecordReader<Void, Object> {
   private final Iterator<InternalRow> baseIterator;
   private final int dvColumnIndex;
   private final Set<Integer> columnsToRemoveIndices;
-  private final int numOutputFields;
   private Object currentValue;
   private boolean finished;
 
@@ -47,14 +45,13 @@ public class DVFilteringRecordReader extends RecordReader<Void, Object> {
       Iterator<InternalRow> baseIterator,
       int dvColumnIndex,
       int[] columnsToRemoveIndices,
-      int numOutputFields) {
+      int numOutputFields) { // numOutputFields is ignored - we compute from actual batch
     this.baseIterator = baseIterator;
     this.dvColumnIndex = dvColumnIndex;
     this.columnsToRemoveIndices = new HashSet<>();
     for (int idx : columnsToRemoveIndices) {
       this.columnsToRemoveIndices.add(idx);
     }
-    this.numOutputFields = numOutputFields;
     this.currentValue = null;
     this.finished = false;
   }
@@ -152,14 +149,15 @@ public class DVFilteringRecordReader extends RecordReader<Void, Object> {
     System.arraycopy(rowIdMapping, 0, trimmedMapping, 0, numLiveRows);
 
     // Create filtered column vectors - only keep columns that exist in batch and aren't removed
-    ColumnVector[] filteredVectors = new ColumnVector[numOutputFields];
-    int outputIdx = 0;
+    java.util.List<ColumnVector> filteredVectorsList = new java.util.ArrayList<>();
 
     for (int i = 0; i < numCols; i++) {
       if (!columnsToRemoveIndices.contains(i)) {
-        filteredVectors[outputIdx++] = new ColumnVectorWithFilter(batch.column(i), trimmedMapping);
+        filteredVectorsList.add(new ColumnVectorWithFilter(batch.column(i), trimmedMapping));
       }
     }
+
+    ColumnVector[] filteredVectors = filteredVectorsList.toArray(new ColumnVector[0]);
 
     ColumnarBatch result = new ColumnarBatch(filteredVectors);
     result.setNumRows(numLiveRows);
@@ -167,16 +165,15 @@ public class DVFilteringRecordReader extends RecordReader<Void, Object> {
   }
 
   private InternalRow projectRow(InternalRow row) {
-    Object[] values = new Object[numOutputFields];
-    int outputIndex = 0;
+    // Dynamically build the output row based on which columns are not removed
+    java.util.List<Object> valuesList = new java.util.ArrayList<>();
 
     for (int i = 0; i < row.numFields(); i++) {
       if (!columnsToRemoveIndices.contains(i)) {
-        values[outputIndex++] = row.get(i, null);
+        valuesList.add(row.get(i, null));
       }
     }
 
-    return InternalRow.fromSeq(
-        JavaConverters.asScalaIterator(Arrays.asList(values).iterator()).toSeq());
+    return InternalRow.fromSeq(JavaConverters.asScalaIterator(valuesList.iterator()).toSeq());
   }
 }

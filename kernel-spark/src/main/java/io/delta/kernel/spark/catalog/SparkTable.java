@@ -207,12 +207,9 @@ public class SparkTable implements Table, SupportsRead {
 
   @Override
   public StructType schema() {
-    return schema;
-  }
-
-  @Override
-  public Column[] columns() {
-    return columns;
+    return DeltaTableUtils.removeInternalDeltaMetadata(
+        SparkSession.active(),
+        DeltaTableUtils.removeInternalWriterMetadata(SparkSession.active(), schema));
   }
 
   @Override

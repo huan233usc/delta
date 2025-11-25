@@ -198,11 +198,20 @@ public class SparkScan implements Scan, SupportsReportStatistics, SupportsRuntim
 
     final Object[] values = new Object[numPartCols];
 
-    // Build field name -> index map once
+    // Build field name -> index map, considering column mapping
+    // In column mapping mode, partitionValues keys are physical names
     final Map<String, Integer> fieldIndex = new HashMap<>(numPartCols);
     for (int i = 0; i < numPartCols; i++) {
-      fieldIndex.put(partitionSchema.fields()[i].name(), i);
+      final StructField field = partitionSchema.fields()[i];
       values[i] = null;
+
+      // Try physical name first (for column mapping mode)
+      if (field.metadata().contains("delta.columnMapping.physicalName")) {
+        String physicalName = field.metadata().getString("delta.columnMapping.physicalName");
+        fieldIndex.put(physicalName, i);
+      }
+      // Also register logical name (for non-column-mapping mode and backwards compatibility)
+      fieldIndex.put(field.name(), i);
     }
 
     // Fill values in a single pass over partitionValues
