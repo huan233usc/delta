@@ -25,13 +25,17 @@ import io.delta.kernel.defaults.engine.DefaultEngine;
 import io.delta.kernel.engine.Engine;
 import io.delta.kernel.expressions.Predicate;
 import io.delta.kernel.internal.actions.AddFile;
+import io.delta.kernel.internal.actions.DeletionVectorDescriptor;
 import io.delta.kernel.internal.data.ScanStateRow;
 import io.delta.kernel.spark.snapshot.DeltaSnapshotManager;
 import io.delta.kernel.spark.utils.ScalaUtils;
 import io.delta.kernel.utils.CloseableIterator;
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
 import java.io.IOException;
 import java.time.ZoneId;
 import java.util.*;
+import java.util.Base64;
 import java.util.stream.Collectors;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.spark.paths.SparkPath;
@@ -44,6 +48,7 @@ import org.apache.spark.sql.connector.expressions.NamedReference;
 import org.apache.spark.sql.connector.read.*;
 import org.apache.spark.sql.connector.read.streaming.MicroBatchStream;
 import org.apache.spark.sql.delta.DeltaOptions;
+import org.apache.spark.sql.delta.RowIndexFilterType;
 import org.apache.spark.sql.execution.datasources.*;
 import org.apache.spark.sql.internal.SQLConf;
 import org.apache.spark.sql.sources.Filter;
@@ -227,8 +232,6 @@ public class SparkScan implements Scan, SupportsReportStatistics, SupportsRuntim
     final Iterator<FilteredColumnarBatch> scanFileBatches = kernelScan.getScanFiles(tableEngine);
 
     final String[] locations = new String[0];
-    final scala.collection.immutable.Map<String, Object> otherConstantMetadataColumnValues =
-        scala.collection.immutable.Map$.MODULE$.empty();
 
     while (scanFileBatches.hasNext()) {
       final FilteredColumnarBatch batch = scanFileBatches.next();
@@ -237,6 +240,10 @@ public class SparkScan implements Scan, SupportsReportStatistics, SupportsRuntim
         while (addFileRowIter.hasNext()) {
           final Row row = addFileRowIter.next();
           final AddFile addFile = new AddFile(row.getStruct(0));
+
+          // Build metadata map with deletion vector information if present
+          final scala.collection.immutable.Map<String, Object> otherConstantMetadataColumnValues =
+              buildMetadataMap(addFile);
 
           final PartitionedFile partitionedFile =
               new PartitionedFile(
@@ -255,6 +262,90 @@ public class SparkScan implements Scan, SupportsReportStatistics, SupportsRuntim
       } catch (IOException e) {
         throw new RuntimeException(e);
       }
+    }
+  }
+
+  /** Build metadata map for PartitionedFile, including deletion vector information if present. */
+  @SuppressWarnings({"rawtypes", "unchecked"})
+  private scala.collection.immutable.Map<String, Object> buildMetadataMap(AddFile addFile) {
+    Map<String, Object> javaMetadata = new HashMap<>();
+
+    // Add deletion vector information if present
+    addFile
+        .getDeletionVector()
+        .ifPresent(
+            dv -> {
+              // Serialize deletion vector to base64 format compatible with DeltaParquetFileFormat
+              String serializedDV = serializeDeletionVectorToBase64(dv);
+              javaMetadata.put("row_index_filter_id_encoded", serializedDV);
+
+              // Set filter type to IF_CONTAINED to filter out deleted rows
+              javaMetadata.put("row_index_filter_type", RowIndexFilterType.IF_CONTAINED);
+            });
+
+    // Add row tracking information if present
+    addFile
+        .getBaseRowId()
+        .ifPresent(
+            baseRowId -> {
+              javaMetadata.put("base_row_id", baseRowId);
+            });
+
+    addFile
+        .getDefaultRowCommitVersion()
+        .ifPresent(
+            version -> {
+              javaMetadata.put("default_row_commit_version", version);
+            });
+
+    // Convert Java map to Scala immutable map using Builder pattern (same as ScalaUtils)
+    scala.collection.mutable.Builder<
+            scala.Tuple2<String, Object>, scala.collection.immutable.Map<String, Object>>
+        builder =
+            (scala.collection.mutable.Builder) scala.collection.immutable.Map$.MODULE$.newBuilder();
+
+    for (Map.Entry<String, Object> entry : javaMetadata.entrySet()) {
+      builder.$plus$eq(new scala.Tuple2<>(entry.getKey(), entry.getValue()));
+    }
+    return builder.result();
+  }
+
+  /**
+   * Serialize deletion vector descriptor to Base64 format compatible with Spark's
+   * DeletionVectorDescriptor.deserializeFromBase64().
+   *
+   * <p>Format: - cardinality (8 bytes - long) - sizeInBytes (4 bytes - int) - storageType (1 byte)
+   * - offset (4 bytes - int, only if not inline) - pathOrInlineDv (UTF string)
+   */
+  private String serializeDeletionVectorToBase64(DeletionVectorDescriptor dv) {
+    try (ByteArrayOutputStream bs = new ByteArrayOutputStream();
+        DataOutputStream ds = new DataOutputStream(bs)) {
+
+      ds.writeLong(dv.getCardinality());
+      ds.writeInt(dv.getSizeInBytes());
+
+      byte[] storageTypeBytes = dv.getStorageType().getBytes();
+      if (storageTypeBytes.length != 1) {
+        throw new IllegalArgumentException(
+            "Storage type must be 1 byte value: " + dv.getStorageType());
+      }
+      ds.writeByte(storageTypeBytes[0]);
+
+      if (!dv.getStorageType().equals(DeletionVectorDescriptor.INLINE_DV_MARKER)) {
+        if (!dv.getOffset().isPresent()) {
+          throw new IllegalArgumentException("Offset must be present for non-inline DV");
+        }
+        ds.writeInt(dv.getOffset().get());
+      } else {
+        if (dv.getOffset().isPresent()) {
+          throw new IllegalArgumentException("Offset must not be present for inline DV");
+        }
+      }
+
+      ds.writeUTF(dv.getPathOrInlineDv());
+      return Base64.getEncoder().encodeToString(bs.toByteArray());
+    } catch (IOException e) {
+      throw new RuntimeException("Failed to serialize deletion vector", e);
     }
   }
 

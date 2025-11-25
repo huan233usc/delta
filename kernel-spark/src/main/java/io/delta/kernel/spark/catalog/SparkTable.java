@@ -141,7 +141,10 @@ public class SparkTable implements Table, SupportsRead {
     this.snapshotManager = new PathBasedSnapshotManager(tablePath, hadoopConf);
     // Load the initial snapshot through the manager
     this.initialSnapshot = snapshotManager.loadLatestSnapshot();
+
+    // Convert base schema (do NOT add DV column here)
     this.schema = SchemaUtils.convertKernelSchemaToSparkSchema(initialSnapshot.getSchema());
+
     this.partColNames =
         Collections.unmodifiableList(new ArrayList<>(initialSnapshot.getPartitionColumnNames()));
 

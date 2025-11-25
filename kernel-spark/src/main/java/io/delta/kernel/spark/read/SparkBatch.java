@@ -32,9 +32,14 @@ import org.apache.spark.sql.execution.datasources.FileFormat$;
 import org.apache.spark.sql.execution.datasources.FilePartition;
 import org.apache.spark.sql.execution.datasources.FilePartition$;
 import org.apache.spark.sql.execution.datasources.PartitionedFile;
+import org.apache.spark.sql.execution.datasources.RecordReaderIterator;
 import org.apache.spark.sql.execution.datasources.parquet.ParquetUtils;
 import org.apache.spark.sql.internal.SQLConf;
 import org.apache.spark.sql.sources.Filter;
+import org.apache.spark.sql.types.DataTypes;
+import org.apache.spark.sql.types.Metadata;
+import org.apache.spark.sql.types.MetadataBuilder;
+import org.apache.spark.sql.types.StructField;
 import org.apache.spark.sql.types.StructType;
 import scala.Function1;
 import scala.Option;
@@ -102,8 +107,23 @@ public class SparkBatch implements Batch {
 
   @Override
   public PartitionReaderFactory createReaderFactory() {
+    // Check if table supports DV
+    boolean tableSupportsDV = deletionVectorsReadable();
+
+    // Prepare schemas: add DV columns if needed
+    StructType augmentedDataSchema = dataSchema;
+    StructType augmentedReadDataSchema = readDataSchema;
+
+    if (tableSupportsDV) {
+      // Add __delta_internal_is_row_deleted to both schemas
+      augmentedDataSchema = addDVColumn(dataSchema);
+      augmentedReadDataSchema = addDVColumn(readDataSchema);
+      // Add _tmp_metadata_row_index to readDataSchema (requiredSchema)
+      augmentedReadDataSchema = addTmpMetadataRowIndexColumn(augmentedReadDataSchema);
+    }
+
     boolean enableVectorizedReader =
-        ParquetUtils.isBatchReadSupportedForSchema(sqlConf, readDataSchema);
+        ParquetUtils.isBatchReadSupportedForSchema(sqlConf, augmentedReadDataSchema);
     scala.collection.immutable.Map<String, String> optionsWithBatch =
         scalaOptions.$plus(
             new Tuple2<>(
@@ -116,17 +136,22 @@ public class SparkBatch implements Batch {
             ((SnapshotImpl) initialSnapshot).getProtocol(),
             ((SnapshotImpl) initialSnapshot).getMetadata(),
             tablePath,
-            true);
+            true); // optimizationsEnabled = true
 
     Function1<PartitionedFile, Iterator<InternalRow>> readFunc =
         fileFormat.buildReaderWithPartitionValues(
             SparkSession.active(),
-            dataSchema,
+            augmentedDataSchema,
             partitionSchema,
-            readDataSchema,
+            augmentedReadDataSchema,
             JavaConverters.asScalaBuffer(Arrays.asList(dataFilters)).toSeq(),
             optionsWithBatch,
             hadoopConf);
+
+    // If DV is enabled, wrap reader to filter deleted rows and remove internal columns
+    if (tableSupportsDV) {
+      readFunc = wrapReaderForDV(readFunc, augmentedReadDataSchema);
+    }
 
     return new SparkReaderFactory(readFunc, enableVectorizedReader);
   }
@@ -176,5 +201,108 @@ public class SparkBatch implements Batch {
     long bytesPerCore = calculatedTotalBytes / minPartitionNum;
 
     return Math.min(defaultMaxSplitBytes, Math.max(openCostInBytes, bytesPerCore));
+  }
+
+  /** Check if table supports deletion vectors. */
+  private boolean deletionVectorsReadable() {
+    try {
+      SnapshotImpl snapshotImpl = (SnapshotImpl) initialSnapshot;
+      io.delta.kernel.internal.actions.Protocol protocol = snapshotImpl.getProtocol();
+      io.delta.kernel.internal.actions.Metadata metadata = snapshotImpl.getMetadata();
+
+      java.util.Set<String> readerFeatures = protocol.getReaderFeatures();
+      boolean hasDVFeature = readerFeatures != null && readerFeatures.contains("deletionVectors");
+      boolean isParquet = "parquet".equals(metadata.getFormat().getProvider());
+
+      return hasDVFeature && isParquet;
+    } catch (Exception e) {
+      return false;
+    }
+  }
+
+  /** Add __delta_internal_is_row_deleted column to schema. */
+  private StructType addDVColumn(StructType schema) {
+    StructField dvColumn =
+        DataTypes.createStructField(
+            "__delta_internal_is_row_deleted", DataTypes.ByteType, true); // nullable = true
+    return schema.add(dvColumn);
+  }
+
+  /** Add _tmp_metadata_row_index column with proper metadata. */
+  private StructType addTmpMetadataRowIndexColumn(StructType schema) {
+    Metadata metadata =
+        new MetadataBuilder()
+            .putString("__file_source_generated_metadata_col", "_tmp_metadata_row_index")
+            .putBoolean("__is_internal_column", true)
+            .build();
+
+    StructField tmpRowIndexField =
+        new StructField(
+            "_tmp_metadata_row_index",
+            DataTypes.LongType,
+            true, // nullable = true
+            metadata);
+    return schema.add(tmpRowIndexField);
+  }
+
+  /** Wrap reader to use DVFilteringRecordReader and return RecordReaderIterator. */
+  private Function1<PartitionedFile, Iterator<InternalRow>> wrapReaderForDV(
+      Function1<PartitionedFile, Iterator<InternalRow>> baseReader, StructType schemaWithDV) {
+    return new DVReaderWrapper(baseReader, schemaWithDV);
+  }
+
+  /**
+   * Serializable wrapper that applies DV filtering to a base reader. Must be static to avoid
+   * capturing SparkBatch instance.
+   */
+  private static class DVReaderWrapper
+      extends scala.runtime.AbstractFunction1<PartitionedFile, Iterator<InternalRow>>
+      implements java.io.Serializable {
+    private static final long serialVersionUID = 1L;
+
+    private final Function1<PartitionedFile, Iterator<InternalRow>> baseReader;
+    private final StructType schemaWithDV;
+
+    public DVReaderWrapper(
+        Function1<PartitionedFile, Iterator<InternalRow>> baseReader, StructType schemaWithDV) {
+      this.baseReader = baseReader;
+      this.schemaWithDV = schemaWithDV;
+    }
+
+    @Override
+    public Iterator<InternalRow> apply(PartitionedFile file) {
+      // Get base iterator from original reader
+      Iterator<InternalRow> baseIterator = baseReader.apply(file);
+
+      // Find DV column index and columns to remove
+      int dvColumnIndex = -1;
+      List<Integer> columnsToRemoveList = new ArrayList<>();
+
+      for (int i = 0; i < schemaWithDV.fields().length; i++) {
+        String fieldName = schemaWithDV.fields()[i].name();
+        if ("__delta_internal_is_row_deleted".equals(fieldName)) {
+          dvColumnIndex = i;
+          columnsToRemoveList.add(i);
+        } else if ("_tmp_metadata_row_index".equals(fieldName)) {
+          columnsToRemoveList.add(i);
+        }
+      }
+
+      int[] columnsToRemove = columnsToRemoveList.stream().mapToInt(Integer::intValue).toArray();
+      int numOutputFields = schemaWithDV.fields().length - columnsToRemove.length;
+
+      // Create DVFilteringRecordReader with Scala Iterator directly
+      DVFilteringRecordReader recordReader =
+          new DVFilteringRecordReader(
+              baseIterator, dvColumnIndex, columnsToRemove, numOutputFields);
+
+      // Wrap in RecordReaderIterator to match expected type
+      @SuppressWarnings("unchecked")
+      org.apache.hadoop.mapreduce.RecordReader<Void, InternalRow> typedRecordReader =
+          (org.apache.hadoop.mapreduce.RecordReader<Void, InternalRow>)
+              (org.apache.hadoop.mapreduce.RecordReader<?, ?>) recordReader;
+
+      return new RecordReaderIterator<InternalRow>(typedRecordReader);
+    }
   }
 }
