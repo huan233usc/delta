@@ -27,9 +27,8 @@ import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
 import org.apache.parquet.format.converter.ParquetMetadataConverter
 import org.apache.parquet.hadoop.ParquetFileReader
-
 import org.apache.spark.sql.{DataFrame, Dataset, QueryTest}
-import org.apache.spark.sql.execution.datasources.{HadoopFsRelation, LogicalRelation}
+import org.apache.spark.sql.execution.datasources.{FileIndex, HadoopFsRelation, LogicalRelation}
 import org.apache.spark.sql.test.SharedSparkSession
 
 trait DeltaParquetFileFormatSuiteBase
@@ -97,9 +96,60 @@ trait DeltaParquetFileFormatSuiteBase
   lazy val dvStore: DeletionVectorStore = DeletionVectorStore.createInstance(hadoopConf)
 }
 
+/**
+ * Result from creating the file format and associated test objects.
+ *
+ * @param fileIndex The file index for the Delta table
+ * @param deltaParquetFormat The DeltaParquetFileFormatBase instance (V1 or V2)
+ * @param readingSchema The schema to use for reading
+ */
+case class FileFormatTestContext(
+    fileIndex: FileIndex,
+    deltaParquetFormat: DeltaParquetFileFormatBase,
+    readingSchema: org.apache.spark.sql.types.StructType)
 
-class DeltaParquetFileFormatSuite extends DeltaParquetFileFormatSuiteBase {
+/**
+ * Abstract base suite for DeltaParquetFileFormat tests.
+ * Subclasses implement createFileFormatTestContext to provide V1 or V2 implementations.
+ */
+abstract class DeltaParquetFileFormatBasicSuiteBase extends DeltaParquetFileFormatSuiteBase {
   import testImplicits._
+
+  /** Whether this suite supports deletion vectors tests */
+  protected def supportsDeletionVectors: Boolean = true
+
+  /**
+   * Create the test context including file index, file format, and reading schema.
+   *
+   * @param tablePath Path to the test table
+   * @param readIsRowDeletedCol Whether to include IS_ROW_DELETED column
+   * @param readRowIndexCol Whether to include ROW_INDEX column
+   * @param enableDVs Whether deletion vectors are enabled
+   */
+  def createFileFormatTestContext(
+      tablePath: String,
+      readIsRowDeletedCol: Boolean,
+      readRowIndexCol: Boolean,
+      enableDVs: Boolean): FileFormatTestContext
+
+  /**
+   * Prepare the table for DV tests by removing specific rows.
+   * Override in subclasses to customize DV creation behavior.
+   */
+  protected def prepareTableForDVTest(tablePath: String): Unit = {
+    val deltaLog = DeltaLog.forTable(spark, tablePath)
+    val addFile = deltaLog.snapshot.allFiles.collect()(0)
+    removeRowsFromFile(deltaLog, addFile, Seq(0, 200, 300, 756, 10352, 19999))
+  }
+
+  /**
+   * Get the file path to verify for multiple row groups.
+   */
+  protected def getFilePathForRowGroupVerification(tablePath: String): Path = {
+    val deltaLog = DeltaLog.forTable(spark, tablePath)
+    val addFile = deltaLog.snapshot.allFiles.collect()(0)
+    addFile.absolutePath(deltaLog)
+  }
 
   override def beforeAll(): Unit = {
     super.beforeAll()
@@ -114,10 +164,17 @@ class DeltaParquetFileFormatSuite extends DeltaParquetFileFormatSuiteBase {
     enableDVs <- BOOLEAN_DOMAIN
     if (enableDVs && readIsRowDeletedCol) || !enableDVs
   } {
+    // Skip DV tests for suites that don't support them
+    val shouldSkip = enableDVs && !supportsDeletionVectors
+
     testWithBothParquetReaders(
       s"isDeletionVectorsEnabled=$enableDVs, read DV metadata columns: " +
         s"with isRowDeletedCol=$readIsRowDeletedCol, " +
         s"with rowIndexCol=$readRowIndexCol") {
+      if (shouldSkip) {
+        cancel("Deletion vectors not supported in this implementation")
+      }
+
       withSQLConf(DeltaConfigs.ENABLE_DELETION_VECTORS_CREATION.defaultTablePropertyKey ->
           enableDVs.toString) {
         withTempDir { tempDir =>
@@ -126,37 +183,16 @@ class DeltaParquetFileFormatSuite extends DeltaParquetFileFormatSuiteBase {
           // Generate a table with one parquet file containing multiple row groups.
           generateData(tablePath)
 
-          val deltaLog = DeltaLog.forTable(spark, tempDir)
-          val metadata = deltaLog.snapshot.metadata
-
-          // Add additional field that has the deleted row flag to existing data schema
-          var readingSchema = metadata.schema
-          if (readIsRowDeletedCol) {
-            readingSchema = readingSchema.add(DeltaParquetFileFormat.IS_ROW_DELETED_STRUCT_FIELD)
-          }
-          if (readRowIndexCol) {
-            readingSchema = readingSchema.add(DeltaParquetFileFormat.ROW_INDEX_STRUCT_FIELD)
-          }
-
-          // Fetch the only file in the DeltaLog snapshot
-          val addFile = deltaLog.snapshot.allFiles.collect()(0)
-
           if (enableDVs) {
-            removeRowsFromFile(deltaLog, addFile, Seq(0, 200, 300, 756, 10352, 19999))
+            prepareTableForDVTest(tablePath)
           }
 
-          val addFilePath = addFile.absolutePath(deltaLog)
+          val addFilePath = getFilePathForRowGroupVerification(tablePath)
           assertParquetHasMultipleRowGroups(addFilePath)
 
-          val deltaParquetFormat = new DeltaParquetFileFormat(
-            deltaLog.snapshot.protocol,
-            metadata,
-            nullableRowTrackingConstantFields = false,
-            nullableRowTrackingGeneratedFields = false,
-            optimizationsEnabled = false,
-            if (enableDVs) Some(tablePath) else None)
-
-          val fileIndex = TahoeLogFileIndex(spark, deltaLog)
+          // Create file format using implementation-specific method
+          val FileFormatTestContext(fileIndex, deltaParquetFormat, readingSchema) =
+            createFileFormatTestContext(tablePath, readIsRowDeletedCol, readRowIndexCol, enableDVs)
 
           val relation = HadoopFsRelation(
             fileIndex,
@@ -220,6 +256,42 @@ class DeltaParquetFileFormatSuite extends DeltaParquetFileFormatSuiteBase {
         }
       }
     }
+  }
+}
+
+/**
+ * V1 implementation of DeltaParquetFileFormat tests using DeltaParquetFileFormat.
+ */
+class DeltaParquetFileFormatSuite extends DeltaParquetFileFormatBasicSuiteBase {
+
+  override def createFileFormatTestContext(
+      tablePath: String,
+      readIsRowDeletedCol: Boolean,
+      readRowIndexCol: Boolean,
+      enableDVs: Boolean): FileFormatTestContext = {
+    val deltaLog = DeltaLog.forTable(spark, tablePath)
+    val metadata = deltaLog.snapshot.metadata
+
+    // Add additional field that has the deleted row flag to existing data schema
+    var readingSchema = metadata.schema
+    if (readIsRowDeletedCol) {
+      readingSchema = readingSchema.add(DeltaParquetFileFormat.IS_ROW_DELETED_STRUCT_FIELD)
+    }
+    if (readRowIndexCol) {
+      readingSchema = readingSchema.add(DeltaParquetFileFormat.ROW_INDEX_STRUCT_FIELD)
+    }
+
+    val deltaParquetFormat = new DeltaParquetFileFormat(
+      deltaLog.snapshot.protocol,
+      metadata,
+      nullableRowTrackingConstantFields = false,
+      nullableRowTrackingGeneratedFields = false,
+      optimizationsEnabled = false,
+      if (enableDVs) Some(tablePath) else None)
+
+    val fileIndex = TahoeLogFileIndex(spark, deltaLog, None)
+
+    FileFormatTestContext(fileIndex, deltaParquetFormat, readingSchema)
   }
 }
 
