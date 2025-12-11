@@ -46,8 +46,14 @@ import org.apache.spark.sql.execution.datasources.PartitioningUtils;
 import org.apache.spark.sql.execution.datasources.parquet.ParquetUtils;
 import org.apache.spark.sql.internal.SQLConf;
 import org.apache.spark.sql.sources.Filter;
+import org.apache.spark.sql.types.Decimal;
 import org.apache.spark.sql.types.StructField;
 import org.apache.spark.sql.types.StructType;
+import org.apache.spark.sql.vectorized.ColumnVector;
+import org.apache.spark.sql.vectorized.ColumnarArray;
+import org.apache.spark.sql.vectorized.ColumnarBatch;
+import org.apache.spark.sql.vectorized.ColumnarMap;
+import org.apache.spark.unsafe.types.UTF8String;
 import scala.Function1;
 import scala.Option;
 import scala.Tuple2;
@@ -259,10 +265,9 @@ public class PartitionUtils {
       augmentedReadDataSchema = addIsRowDeletedColumn(readDataSchema);
     }
 
-    // Phase 1: Disable vectorized reader when DV is enabled to simplify implementation
-    // Phase 2 will add vectorized reader support with ColumnarBatch filtering
+    // Phase 2: Enable vectorized reader when schema supports it (including DV tables)
     boolean enableVectorizedReader =
-        !tableSupportsDV && ParquetUtils.isBatchReadSupportedForSchema(sqlConf, readDataSchema);
+        ParquetUtils.isBatchReadSupportedForSchema(sqlConf, augmentedReadDataSchema);
     scala.collection.immutable.Map<String, String> optionsWithVectorizedReading =
         scalaOptions.$plus(
             new Tuple2<>(
@@ -358,8 +363,11 @@ public class PartitionUtils {
   /**
    * Serializable wrapper function that applies DV filtering to the base reader.
    *
-   * <p>Must be a static class that implements Serializable to allow Spark task serialization.
+   * <p>Must be a static class that implements Serializable to allow Spark task serialization. The
+   * returned iterator may yield either InternalRow or ColumnarBatch depending on vectorized reader
+   * setting.
    */
+  @SuppressWarnings("unchecked")
   private static class DVFilteringReadFunc
       extends scala.runtime.AbstractFunction1<PartitionedFile, Iterator<InternalRow>>
       implements java.io.Serializable {
@@ -381,22 +389,25 @@ public class PartitionUtils {
     @Override
     public Iterator<InternalRow> apply(PartitionedFile file) {
       Iterator<InternalRow> baseIter = baseReadFunc.apply(file);
-      return new DVFilteringIterator(baseIter, dvColumnIndex, totalColumns);
+      // Return as Iterator<InternalRow> but actual elements may be ColumnarBatch
+      return (Iterator<InternalRow>)
+          (Iterator<?>) new DVFilteringIterator(baseIter, dvColumnIndex, totalColumns);
     }
   }
 
   /**
    * Iterator that filters deleted rows and removes the DV column from output.
    *
-   * <p>Phase 1: Only handles row-based (InternalRow) output since vectorized reader is disabled.
+   * <p>Phase 2: Handles both row-based (InternalRow) and columnar (ColumnarBatch) output. Returns
+   * Object because actual type depends on whether vectorized reader is enabled.
    */
-  private static class DVFilteringIterator implements Iterator<InternalRow> {
-    private final Iterator<InternalRow> baseIter;
+  private static class DVFilteringIterator implements Iterator<Object> {
+    private final Iterator<?> baseIter;
     private final int dvColumnIndex;
     private final int outputNumColumns;
-    private InternalRow nextRow = null;
+    private Object nextValue = null; // Can be InternalRow or ColumnarBatch
 
-    DVFilteringIterator(Iterator<InternalRow> baseIter, int dvColumnIndex, int totalColumns) {
+    DVFilteringIterator(Iterator<?> baseIter, int dvColumnIndex, int totalColumns) {
       this.baseIter = baseIter;
       this.dvColumnIndex = dvColumnIndex;
       this.outputNumColumns = totalColumns - 1; // Exclude DV column
@@ -404,26 +415,77 @@ public class PartitionUtils {
 
     @Override
     public boolean hasNext() {
-      while (nextRow == null && baseIter.hasNext()) {
-        InternalRow row = baseIter.next();
-        // Check if row is deleted (0 = keep, non-0 = delete)
-        byte isDeleted = row.getByte(dvColumnIndex);
-        if (isDeleted == 0) {
-          nextRow = projectRow(row);
-          return true;
+      while (nextValue == null && baseIter.hasNext()) {
+        Object item = baseIter.next();
+
+        if (item instanceof ColumnarBatch) {
+          ColumnarBatch batch = (ColumnarBatch) item;
+          ColumnarBatch filtered = filterColumnarBatch(batch);
+          if (filtered != null && filtered.numRows() > 0) {
+            nextValue = filtered;
+            return true;
+          }
+        } else if (item instanceof InternalRow) {
+          InternalRow row = (InternalRow) item;
+          // Check if row is deleted (0 = keep, non-0 = delete)
+          byte isDeleted = row.getByte(dvColumnIndex);
+          if (isDeleted == 0) {
+            nextValue = projectRow(row);
+            return true;
+          }
         }
       }
-      return nextRow != null;
+      return nextValue != null;
     }
 
     @Override
-    public InternalRow next() {
-      if (nextRow == null && !hasNext()) {
+    public Object next() {
+      if (nextValue == null && !hasNext()) {
         throw new java.util.NoSuchElementException();
       }
-      InternalRow result = nextRow;
-      nextRow = null;
+      Object result = nextValue;
+      nextValue = null;
       return result;
+    }
+
+    /** Filter deleted rows from ColumnarBatch and remove DV column. */
+    private ColumnarBatch filterColumnarBatch(ColumnarBatch batch) {
+      int numRows = batch.numRows();
+      if (numRows == 0) {
+        return null;
+      }
+
+      // Get the DV column to check which rows are deleted
+      ColumnVector dvColumn = batch.column(dvColumnIndex);
+
+      // Build row ID mapping for non-deleted rows
+      int[] rowIdMapping = new int[numRows];
+      int validCount = 0;
+      for (int i = 0; i < numRows; i++) {
+        if (dvColumn.getByte(i) == 0) {
+          rowIdMapping[validCount++] = i;
+        }
+      }
+
+      if (validCount == 0) {
+        return null;
+      }
+
+      // Trim the mapping array to actual size
+      int[] finalMapping =
+          validCount < numRows ? Arrays.copyOf(rowIdMapping, validCount) : rowIdMapping;
+
+      // Create filtered column vectors (excluding DV column)
+      int numOutputCols = batch.numCols() - 1;
+      ColumnVector[] filteredColumns = new ColumnVector[numOutputCols];
+      int outIdx = 0;
+      for (int i = 0; i < batch.numCols(); i++) {
+        if (i != dvColumnIndex) {
+          filteredColumns[outIdx++] = new FilteredColumnVector(batch.column(i), finalMapping);
+        }
+      }
+
+      return new ColumnarBatch(filteredColumns, validCount);
     }
 
     /** Project out the DV column from the row. */
@@ -436,6 +498,113 @@ public class PartitionUtils {
         }
       }
       return new org.apache.spark.sql.catalyst.expressions.GenericInternalRow(values);
+    }
+  }
+
+  /**
+   * A zero-copy filtered ColumnVector that uses row ID mapping to expose only non-deleted rows.
+   *
+   * <p>This wraps the original ColumnVector and redirects all row access through the mapping array.
+   */
+  private static class FilteredColumnVector extends ColumnVector {
+    private final ColumnVector baseVector;
+    private final int[] rowIdMapping;
+
+    FilteredColumnVector(ColumnVector baseVector, int[] rowIdMapping) {
+      super(baseVector.dataType());
+      this.baseVector = baseVector;
+      this.rowIdMapping = rowIdMapping;
+    }
+
+    private int mapRowId(int rowId) {
+      return rowIdMapping[rowId];
+    }
+
+    @Override
+    public void close() {
+      // Don't close baseVector - it's owned by the original batch
+    }
+
+    @Override
+    public boolean hasNull() {
+      return baseVector.hasNull();
+    }
+
+    @Override
+    public int numNulls() {
+      // This is an approximation - we don't recalculate for filtered rows
+      return baseVector.numNulls();
+    }
+
+    @Override
+    public boolean isNullAt(int rowId) {
+      return baseVector.isNullAt(mapRowId(rowId));
+    }
+
+    @Override
+    public boolean getBoolean(int rowId) {
+      return baseVector.getBoolean(mapRowId(rowId));
+    }
+
+    @Override
+    public byte getByte(int rowId) {
+      return baseVector.getByte(mapRowId(rowId));
+    }
+
+    @Override
+    public short getShort(int rowId) {
+      return baseVector.getShort(mapRowId(rowId));
+    }
+
+    @Override
+    public int getInt(int rowId) {
+      return baseVector.getInt(mapRowId(rowId));
+    }
+
+    @Override
+    public long getLong(int rowId) {
+      return baseVector.getLong(mapRowId(rowId));
+    }
+
+    @Override
+    public float getFloat(int rowId) {
+      return baseVector.getFloat(mapRowId(rowId));
+    }
+
+    @Override
+    public double getDouble(int rowId) {
+      return baseVector.getDouble(mapRowId(rowId));
+    }
+
+    @Override
+    public ColumnarArray getArray(int rowId) {
+      return baseVector.getArray(mapRowId(rowId));
+    }
+
+    @Override
+    public ColumnarMap getMap(int rowId) {
+      return baseVector.getMap(mapRowId(rowId));
+    }
+
+    @Override
+    public Decimal getDecimal(int rowId, int precision, int scale) {
+      return baseVector.getDecimal(mapRowId(rowId), precision, scale);
+    }
+
+    @Override
+    public UTF8String getUTF8String(int rowId) {
+      return baseVector.getUTF8String(mapRowId(rowId));
+    }
+
+    @Override
+    public byte[] getBinary(int rowId) {
+      return baseVector.getBinary(mapRowId(rowId));
+    }
+
+    @Override
+    public ColumnVector getChild(int ordinal) {
+      ColumnVector childBase = baseVector.getChild(ordinal);
+      return new FilteredColumnVector(childBase, rowIdMapping);
     }
   }
 }
