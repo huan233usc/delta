@@ -1,17 +1,17 @@
 /*
- *  Copyright (2026) The Delta Lake Project Authors.
+ * Copyright (2026) The Delta Lake Project Authors.
  *
- *  Licensed under the Apache License, Version 2.0 (the "License");
- *  you may not use this file except in compliance with the License.
- *  You may obtain a copy of the License at
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- *  http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- *  Unless required by applicable law or agreed to in writing, software
- *  distributed under the License is distributed on an "AS IS" BASIS,
- *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  See the License for the specific language governing permissions and
- *  limitations under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.delta.flink.table;
@@ -110,7 +110,7 @@ public class CredentialManager {
   Map<String, String> getCredentials() {
     Map<String, String> cached = cachedCredentials.get();
     if (cached != null) return cached;
-    Map<String, String> newCredentials = this.credSupplier.get();
+    Map<String, String> newCredentials = credSupplier.get();
     if (cachedCredentials.compareAndSet(null, newCredentials)) {
       scheduleNextRefresh(newCredentials);
       return newCredentials;
@@ -134,9 +134,9 @@ public class CredentialManager {
       refreshExecutors.schedule(
           () -> {
             Map<String, String> existingCredential = cachedCredentials.get();
-            Map<String, String> refreshedCredential = this.credSupplier.get();
+            Map<String, String> refreshedCredential = credSupplier.get();
             if (cachedCredentials.compareAndSet(existingCredential, refreshedCredential)) {
-              this.refreshCallback.run();
+              refreshCallback.run();
               scheduleNextRefresh(refreshedCredential);
             }
           },

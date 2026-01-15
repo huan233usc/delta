@@ -1,17 +1,17 @@
 /*
- *  Copyright (2026) The Delta Lake Project Authors.
+ * Copyright (2026) The Delta Lake Project Authors.
  *
- *  Licensed under the Apache License, Version 2.0 (the "License");
- *  you may not use this file except in compliance with the License.
- *  You may obtain a copy of the License at
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- *  http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- *  Unless required by applicable law or agreed to in writing, software
- *  distributed under the License is distributed on an "AS IS" BASIS,
- *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  See the License for the specific language governing permissions and
- *  limitations under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.delta.flink;
@@ -46,23 +46,25 @@ public final class Conf {
 
   private static final Logger LOG = LoggerFactory.getLogger(Conf.class);
 
-  public static String SINK_RETRY_MAX_ATTEMPT = "sink.retry.max_attempt";
+  public static final String SINK_RETRY_MAX_ATTEMPT = "sink.retry.max-attempt";
   // The i-th retry will have a delay of `delay-ms * (2 ^ i)`
-  public static String SINK_RETRY_DELAY_MS = "sink.retry.delay_ms";
+  public static final String SINK_RETRY_DELAY_MS = "sink.retry.delay-ms";
   // Retry will stop if the delay exceeds max-delay
-  public static String SINK_RETRY_MAX_DELAY_MS = "sink.retry.max_delay_ms";
+  public static final String SINK_RETRY_MAX_DELAY_MS = "sink.retry.max-delay-ms";
 
-  public static String SINK_WRITER_NUM_CONCURRENT_FILE = "sink.writer.num_concurrent_file";
+  public static final String SINK_WRITER_NUM_CONCURRENT_FILE = "sink.writer.num-concurrent-file";
 
-  public static String TABLE_THREAD_POOL_SIZE = "table.thread_pool_size";
+  public static final String TABLE_THREAD_POOL_SIZE = "table.thread-pool-size";
 
-  public static String TABLE_CACHE_ENABLE = "table.cache.enable";
-  public static String TABLE_CACHE_SIZE = "table.cache.size";
-  public static String TABLE_CACHE_EXPIRE_MS = "table.cache.expire_ms";
+  public static final String TABLE_CACHE_ENABLE = "table.cache.enable";
+  public static final String TABLE_CACHE_SIZE = "table.cache.size";
+  public static final String TABLE_CACHE_EXPIRE_MS = "table.cache.expire-ms";
 
-  public static String CREDENTIALS_REFRESH_THREAD_POOL_SIZE =
-      "credentials.refresh.thread_pool_size";
-  public static String CREDENTIALS_REFRESH_AHEAD_MS = "credentials.refresh.ahead_ms";
+  public static final String DELTA_CHECKPOINT_FREQUENCY = "delta.checkpoint.frequency";
+
+  public static final String CREDENTIALS_REFRESH_THREAD_POOL_SIZE =
+      "credentials.refresh.thread-pool-size";
+  public static final String CREDENTIALS_REFRESH_AHEAD_MS = "credentials.refresh.ahead-ms";
 
   private static final String CONFIG_FILE = "delta-flink.properties";
   private static final Conf INSTANCE = new Conf();
@@ -113,6 +115,10 @@ public final class Conf {
 
   public long getTableCacheExpireInMs() {
     return Long.parseLong(getOrDefault(TABLE_CACHE_EXPIRE_MS, "300000"));
+  }
+
+  public double getDeltaCheckpointFrequency() {
+    return Double.parseDouble(getOrDefault(DELTA_CHECKPOINT_FREQUENCY, "0"));
   }
 
   public int getCredentialsRefreshThreadPoolSize() {
