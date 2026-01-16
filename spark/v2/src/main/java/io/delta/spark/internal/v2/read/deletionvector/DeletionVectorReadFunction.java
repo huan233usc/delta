@@ -123,7 +123,8 @@ public class DeletionVectorReadFunction
   private static ProjectingInternalRow buildProjection(
       StructType outputSchema, int excludeIndex, int inputColumnCount) {
     // Build ordinals: [0, 1, ..., excludeIndex-1, excludeIndex+1, ..., inputColumnCount-1]
-    int[] ordinals = IntStream.range(0, inputColumnCount).filter(i -> i != excludeIndex).toArray();
+    int[] ordinals =
+        IntStream.range(0, inputColumnCount).filter(i -> i != excludeIndex).toArray();
     return ProjectingInternalRow.apply(
         outputSchema,
         CollectionConverters.asScala(
