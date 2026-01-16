@@ -22,8 +22,8 @@ import org.apache.spark.sql.catalyst.InternalRow;
 import org.apache.spark.sql.catalyst.ProjectingInternalRow;
 import org.apache.spark.sql.execution.datasources.PartitionedFile;
 import org.apache.spark.sql.types.StructType;
-import org.apache.spark.sql.vectorized.ColumnarBatch;
 import org.apache.spark.sql.vectorized.ColumnVector;
+import org.apache.spark.sql.vectorized.ColumnarBatch;
 import scala.Function1;
 import scala.collection.Iterator;
 import scala.jdk.javaapi.CollectionConverters;
@@ -35,7 +35,7 @@ import scala.runtime.AbstractFunction1;
  * <p>Supports both row-based and vectorized reading:
  *
  * <ul>
- *   <li>Row-based: Uses Scala Iterator's flatMap to filter deleted rows and project out DV column
+ *   <li>Row-based: Filters deleted rows and projects out DV column using ProjectingInternalRow
  *   <li>Vectorized: Uses ColumnVectorWithFilter to remap row indices without copying data
  * </ul>
  */
@@ -61,40 +61,48 @@ public class DeletionVectorReadFunction
         buildProjection(
             dvContext.getOutputSchema(), dvColumnIndex, dvContext.getInputColumnCount());
 
-    // Use flatMap to handle both InternalRow and ColumnarBatch
-    return baseReadFunc
-        .apply(file)
-        .flatMap(
-            new AbstractFunction1<InternalRow, Iterator<InternalRow>>() {
-              @Override
-              public Iterator<InternalRow> apply(InternalRow item) {
-                if (item instanceof ColumnarBatch) {
-                  ColumnarBatch filtered =
-                      filterBatch((ColumnarBatch) item, dvColumnIndex, outputColumnCount);
-                  if (filtered != null) {
-                    return Iterator.single((InternalRow) (Object) filtered);
-                  }
-                  return Iterator.empty();
-                } else {
-                  // Row-based: filter deleted rows, project out DV column
-                  if (item.getByte(dvColumnIndex) == 0) {
-                    projection.project(item);
-                    return Iterator.single(projection);
-                  }
-                  return Iterator.empty();
-                }
-              }
-            });
+    // Use Object as input type: Spark passes ColumnarBatch cast to InternalRow in vectorized mode
+    @SuppressWarnings("unchecked")
+    Iterator<Object> baseIterator = (Iterator<Object>) (Iterator<?>) baseReadFunc.apply(file);
+
+    // Filter: skip deleted rows (noop for vectorized)
+    // Map: project row / filter batch
+    @SuppressWarnings("unchecked")
+    Iterator<InternalRow> result =
+        (Iterator<InternalRow>)
+            (Iterator<?>)
+                baseIterator
+                    .filter(
+                        new AbstractFunction1<Object, Object>() {
+                          @Override
+                          public Object apply(Object item) {
+                            // Vectorized: noop (batch filtering done in map)
+                            // Row-based: filter deleted rows
+                            return item instanceof ColumnarBatch
+                                || ((InternalRow) item).getByte(dvColumnIndex) == 0;
+                          }
+                        })
+                    .map(
+                        new AbstractFunction1<Object, Object>() {
+                          @Override
+                          public Object apply(Object item) {
+                            if (item instanceof ColumnarBatch) {
+                              return filterBatch(
+                                  (ColumnarBatch) item, dvColumnIndex, outputColumnCount);
+                            } else {
+                              // Row-based: project out DV column
+                              projection.project((InternalRow) item);
+                              return projection;
+                            }
+                          }
+                        });
+    return result;
   }
 
   /** Filter a ColumnarBatch by building row ID mapping for live rows. */
   private static ColumnarBatch filterBatch(
       ColumnarBatch batch, int dvColumnIndex, int outputColumnCount) {
     int[] liveRows = findLiveRows(batch, dvColumnIndex);
-    if (liveRows.length == 0) {
-      return null;
-    }
-
     // Build filtered column vectors (excluding DV column)
     ColumnVector[] filteredVectors = new ColumnVector[outputColumnCount];
     int outIdx = 0;
@@ -123,8 +131,7 @@ public class DeletionVectorReadFunction
   private static ProjectingInternalRow buildProjection(
       StructType outputSchema, int excludeIndex, int inputColumnCount) {
     // Build ordinals: [0, 1, ..., excludeIndex-1, excludeIndex+1, ..., inputColumnCount-1]
-    int[] ordinals =
-        IntStream.range(0, inputColumnCount).filter(i -> i != excludeIndex).toArray();
+    int[] ordinals = IntStream.range(0, inputColumnCount).filter(i -> i != excludeIndex).toArray();
     return ProjectingInternalRow.apply(
         outputSchema,
         CollectionConverters.asScala(
