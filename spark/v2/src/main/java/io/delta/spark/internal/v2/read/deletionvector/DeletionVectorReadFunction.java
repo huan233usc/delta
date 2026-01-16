@@ -32,6 +32,8 @@ import scala.runtime.AbstractFunction1;
  *
  * <p>Filters deleted rows using Scala Iterator's filter() and projects out the DV column using
  * map() with Spark's ProjectingInternalRow.
+ *
+ * <p>This implementation handles row-based reading only. For vectorized reading support, see PR3.
  */
 public class DeletionVectorReadFunction
     extends AbstractFunction1<PartitionedFile, Iterator<InternalRow>> implements Serializable {
