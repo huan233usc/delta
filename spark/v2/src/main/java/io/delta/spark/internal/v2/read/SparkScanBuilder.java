@@ -18,12 +18,12 @@ package io.delta.spark.internal.v2.read;
 import static java.util.Objects.requireNonNull;
 
 import io.delta.kernel.Snapshot;
-import io.delta.kernel.expressions.And;
 import io.delta.kernel.expressions.Predicate;
 import io.delta.spark.internal.v2.snapshot.DeltaSnapshotManager;
 import io.delta.spark.internal.v2.utils.ExpressionUtils;
 import java.util.*;
 import java.util.stream.Collectors;
+import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.connector.read.ScanBuilder;
 import org.apache.spark.sql.connector.read.SupportsPushDownFilters;
 import org.apache.spark.sql.connector.read.SupportsPushDownRequiredColumns;
@@ -39,7 +39,7 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap;
 public class SparkScanBuilder
     implements ScanBuilder, SupportsPushDownRequiredColumns, SupportsPushDownFilters {
 
-  private io.delta.kernel.ScanBuilder kernelScanBuilder;
+  private DistributedScanBuilder distributedScanBuilder;
   private final Snapshot initialSnapshot;
   private final DeltaSnapshotManager snapshotManager;
   private final StructType dataSchema;
@@ -49,15 +49,17 @@ public class SparkScanBuilder
   private StructType requiredDataSchema;
   // pushedKernelPredicates: Predicates that have been pushed down to the Delta Kernel for
   // evaluation.
-  // pushedSparkFilters: The same pushed predicates, but represented using Spark’s {@link Filter}
+  // pushedSparkFilters: The same pushed predicates, but represented using Spark's {@link Filter}
   // API (needed because Spark operates on Filter objects while the Kernel uses Predicate)
   private Predicate[] pushedKernelPredicates;
   private Filter[] pushedSparkFilters;
   private Filter[] dataFilters;
+  private final SparkSession spark;
 
   /**
    * Creates a SparkScanBuilder with the given snapshot and configuration.
    *
+   * @param spark the Spark session
    * @param tableName the name of the table
    * @param initialSnapshot Snapshot created during connector setup
    * @param snapshotManager the snapshot manager for this table
@@ -66,14 +68,15 @@ public class SparkScanBuilder
    * @param options scan options
    */
   public SparkScanBuilder(
+      SparkSession spark,
       String tableName,
       io.delta.kernel.Snapshot initialSnapshot,
       DeltaSnapshotManager snapshotManager,
       StructType dataSchema,
       StructType partitionSchema,
       CaseInsensitiveStringMap options) {
+    this.spark = requireNonNull(spark, "spark is null");
     this.initialSnapshot = requireNonNull(initialSnapshot, "initialSnapshot is null");
-    this.kernelScanBuilder = initialSnapshot.getScanBuilder();
     this.snapshotManager = requireNonNull(snapshotManager, "snapshotManager is null");
     this.dataSchema = requireNonNull(dataSchema, "dataSchema is null");
     this.partitionSchema = requireNonNull(partitionSchema, "partitionSchema is null");
@@ -85,6 +88,15 @@ public class SparkScanBuilder
             .collect(Collectors.toSet());
     this.pushedKernelPredicates = new Predicate[0];
     this.dataFilters = new Filter[0];
+
+    // POC: Only use DistributedScanBuilder for distributed log replay
+    int numPartitions = getNumPartitionsFromOptions(options);
+    this.distributedScanBuilder = new DistributedScanBuilder(spark, initialSnapshot, numPartitions);
+  }
+
+  private int getNumPartitionsFromOptions(CaseInsensitiveStringMap options) {
+    // Default to 50 partitions, can be configured via options
+    return Integer.parseInt(options.getOrDefault("numPartitions", "50"));
   }
 
   @Override
@@ -143,10 +155,19 @@ public class SparkScanBuilder
 
     this.pushedSparkFilters = kernelSupportedFilters.toArray(new Filter[0]);
     this.pushedKernelPredicates = convertedKernelPredicates.toArray(new Predicate[0]);
-    if (this.pushedKernelPredicates.length > 0) {
-      Optional<Predicate> kernelAnd = Arrays.stream(this.pushedKernelPredicates).reduce(And::new);
-      this.kernelScanBuilder = this.kernelScanBuilder.withFilter(kernelAnd.get());
+
+    // POC: Push ALL Spark Filters to DistributedScanBuilder via OpaquePredicate
+    // The engine evaluates filters at DataFrame level using V1 connector utilities
+    if (filters.length > 0) {
+      SparkFilterOpaquePredicate sparkOp =
+          new SparkFilterOpaquePredicate(Arrays.asList(filters), partitionColumnSet);
+      // Create OpaquePredicate with empty child expressions
+      // (Spark Filters are self-contained and don't need Kernel expressions)
+      Predicate opaquePredicate = Predicate.opaque(sparkOp, Collections.emptyList());
+      this.distributedScanBuilder =
+          (DistributedScanBuilder) this.distributedScanBuilder.withFilter(opaquePredicate);
     }
+
     this.dataFilters = dataFilterList.toArray(new Filter[0]);
     return postScanFilters.toArray(new Filter[0]);
   }
@@ -158,6 +179,15 @@ public class SparkScanBuilder
 
   @Override
   public org.apache.spark.sql.connector.read.Scan build() {
+    // POC: Only use DistributedScanBuilder with distributed log replay
+    // Apply schema projection to DistributedScanBuilder
+    distributedScanBuilder =
+        (DistributedScanBuilder)
+            distributedScanBuilder.withReadSchema(
+                io.delta.spark.internal.v2.utils.SchemaUtils.convertSparkSchemaToKernelSchema(
+                    requiredDataSchema));
+    io.delta.kernel.Scan kernelScan = distributedScanBuilder.build();
+
     return new SparkScan(
         snapshotManager,
         initialSnapshot,
@@ -166,7 +196,7 @@ public class SparkScanBuilder
         requiredDataSchema,
         pushedKernelPredicates,
         dataFilters,
-        kernelScanBuilder.build(),
+        kernelScan,
         options);
   }
 
