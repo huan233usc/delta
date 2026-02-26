@@ -46,26 +46,23 @@ jobs:
         run: |
           git clone --depth 1 --branch v${UC_VERSION} https://github.com/unitycatalog/unitycatalog.git /tmp/unitycatalog
           cd /tmp/unitycatalog
-          build/sbt server/assembly
+          build/sbt package
 
       # Step 2: Start UC server
       - name: Start Unity Catalog server
         run: |
           cd /tmp/unitycatalog
 
-          # Start UC server with managed tables enabled
-          UC_SERVER_DIR=$(mktemp -d)
-          cat > "${UC_SERVER_DIR}/server.properties" <<EOF
+          # Configure UC server with managed tables enabled and in-memory H2 DB
+          mkdir -p etc/conf
+          cat > etc/conf/server.properties <<'EOF'
           server.env=test
           server.managed-table.enabled=true
-          storage-root.tables=${UC_SERVER_DIR}/ucroot
           EOF
 
-          bin/start-uc-server \
-            --config-file "${UC_SERVER_DIR}/server.properties" \
-            --port 8080 &
+          bin/start-uc-server &
 
-          # Wait for server to be ready
+          # Wait for server to be ready (default port 8080)
           echo "Waiting for UC server to start..."
           for i in $(seq 1 30); do
             if curl -s http://localhost:8080/api/2.1/unity-catalog/catalogs > /dev/null 2>&1; then
