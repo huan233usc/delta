@@ -1,0 +1,176 @@
+name: "Unity Catalog Integration Test"
+on:
+  push:
+    paths-ignore:
+      - '**.md'
+      - '**.txt'
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - '**.txt'
+jobs:
+  test:
+    name: "UC Commit Coordinator Integration Test"
+    runs-on: ubuntu-24.04
+    env:
+      UC_VERSION: "0.4.0"
+      CATALOG_NAME: "delta_test"
+      SCHEMA: "default"
+      MANAGED_CC_TABLE: "managed_cc_table"
+      MANAGED_NON_CC_TABLE: "managed_non_cc_table"
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Java 17
+        uses: actions/setup-java@v3
+        with:
+          distribution: "zulu"
+          java-version: "17"
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Cache Scala, SBT
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.sbt
+            ~/.ivy2
+            ~/.cache/coursier
+          key: delta-sbt-cache-uc-integration
+
+      # Step 1: Build UC OSS server from source
+      - name: Clone and build Unity Catalog OSS
+        run: |
+          git clone --depth 1 --branch v${UC_VERSION} https://github.com/unitycatalog/unitycatalog.git /tmp/unitycatalog
+          cd /tmp/unitycatalog
+          build/sbt server/assembly
+
+      # Step 2: Start UC server
+      - name: Start Unity Catalog server
+        run: |
+          cd /tmp/unitycatalog
+
+          # Start UC server with managed tables enabled
+          UC_SERVER_DIR=$(mktemp -d)
+          cat > "${UC_SERVER_DIR}/server.properties" <<EOF
+          server.env=test
+          server.managed-table.enabled=true
+          storage-root.tables=${UC_SERVER_DIR}/ucroot
+          EOF
+
+          bin/start-uc-server \
+            --config-file "${UC_SERVER_DIR}/server.properties" \
+            --port 8080 &
+
+          # Wait for server to be ready
+          echo "Waiting for UC server to start..."
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:8080/api/2.1/unity-catalog/catalogs > /dev/null 2>&1; then
+              echo "UC server is ready"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "UC server failed to start"
+              exit 1
+            fi
+            sleep 1
+          done
+
+      # Step 3: Create catalog, schema, and managed tables
+      - name: Set up UC catalog and tables
+        run: |
+          UC_BASE="http://localhost:8080/api/2.1/unity-catalog"
+
+          # Create catalog
+          curl -s -X POST "${UC_BASE}/catalogs" \
+            -H "Content-Type: application/json" \
+            -d "{\"name\": \"${CATALOG_NAME}\", \"comment\": \"Delta integration test catalog\"}"
+
+          # Create schema
+          curl -s -X POST "${UC_BASE}/schemas" \
+            -H "Content-Type: application/json" \
+            -d "{\"name\": \"${SCHEMA}\", \"catalog_name\": \"${CATALOG_NAME}\"}"
+
+          # Create managed tables (commit-coordinator-owned and non-owned)
+          # These are created via Spark SQL since managed table creation requires Delta metadata
+          echo "Catalog and schema created successfully"
+
+      # Step 4: Build and publish Delta to local Maven
+      - name: Publish Delta to local Maven
+        run: build/sbt publishM2
+
+      # Step 5: Create managed tables via PySpark (needs Delta + UC packages)
+      - name: Create managed tables
+        env:
+          CATALOG_URI: "http://localhost:8080"
+          CATALOG_TOKEN: "static-token"
+        run: |
+          DELTA_VERSION=$(grep 'version :=' version.sbt | sed 's/.*"\(.*\)"/\1/')
+          SPARK_FULL_VERSION=$(python3 project/scripts/get_spark_version_info.py --get-field default fullVersion | tr -d '"')
+          SPARK_SHORT_VERSION=$(python3 project/scripts/get_spark_version_info.py --get-field default packageSuffix | tr -d '"')
+
+          pip install pyspark==${SPARK_FULL_VERSION}
+
+          PACKAGES="io.delta:delta-spark${SPARK_SHORT_VERSION}_2.13:${DELTA_VERSION}"
+          PACKAGES="${PACKAGES},io.unitycatalog:unitycatalog-spark_2.13:${UC_VERSION}"
+
+          python3 - <<'PYEOF'
+          import os
+          from pyspark.sql import SparkSession
+
+          catalog = os.environ["CATALOG_NAME"]
+          schema = os.environ["SCHEMA"]
+          cc_table = os.environ["MANAGED_CC_TABLE"]
+          non_cc_table = os.environ["MANAGED_NON_CC_TABLE"]
+
+          spark = SparkSession.builder \
+              .appName("create_uc_tables") \
+              .master("local[*]") \
+              .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
+              .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
+              .config(f"spark.sql.catalog.{catalog}", "io.unitycatalog.spark.UCSingleCatalog") \
+              .config(f"spark.sql.catalog.{catalog}.uri", os.environ["CATALOG_URI"]) \
+              .config(f"spark.sql.catalog.{catalog}.token", os.environ["CATALOG_TOKEN"]) \
+              .getOrCreate()
+
+          # Create managed tables
+          spark.sql(f"""
+              CREATE TABLE {catalog}.{schema}.{cc_table} (id INT)
+              USING DELTA
+              TBLPROPERTIES ('delta.enableCatalogManagedCommit' = 'true')
+          """)
+
+          spark.sql(f"""
+              CREATE TABLE {catalog}.{schema}.{non_cc_table} (id INT)
+              USING DELTA
+          """)
+
+          # Seed initial data
+          spark.createDataFrame([(1,), (2,), (3,)], ["id"]).write.insertInto(
+              f"{catalog}.{schema}.{cc_table}")
+          spark.createDataFrame([(1,), (2,), (3,)], ["id"]).write.insertInto(
+              f"{catalog}.{schema}.{non_cc_table}")
+
+          print("SUCCESS: Managed tables created and seeded")
+          spark.stop()
+          PYEOF
+
+      # Step 6: Run UC commit coordinator integration tests
+      - name: Run UC commit coordinator integration tests
+        env:
+          CATALOG_URI: "http://localhost:8080"
+          CATALOG_TOKEN: "static-token"
+        run: |
+          DELTA_VERSION=$(grep 'version :=' version.sbt | sed 's/.*"\(.*\)"/\1/')
+          SPARK_SHORT_VERSION=$(python3 project/scripts/get_spark_version_info.py --get-field default packageSuffix | tr -d '"')
+
+          PACKAGES="io.delta:delta-spark${SPARK_SHORT_VERSION}_2.13:${DELTA_VERSION}"
+          PACKAGES="${PACKAGES},io.unitycatalog:unitycatalog-spark_2.13:${UC_VERSION}"
+
+          spark-submit \
+            --driver-class-path python/delta/testing \
+            --packages "${PACKAGES}" \
+            python/delta/integration_tests/unity-catalog-commit-coordinator-integration-tests.py
