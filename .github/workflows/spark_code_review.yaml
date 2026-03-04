@@ -1,0 +1,71 @@
+name: "Spark Code Review Gate"
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'spark/v2/**'
+      - 'spark-unified/**'
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  check-approval:
+    name: "Spark Code Review Approval"
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'pull_request_review' || github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Check for required approval
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const requiredReviewers = ['tdas', 'huan233', 'TimothyW553', 'raveeram-db', 'murali-db'];
+            const prNumber = context.payload.pull_request?.number
+              || context.payload.review?.pull_request?.number;
+
+            if (!prNumber) {
+              core.setFailed('Could not determine PR number');
+              return;
+            }
+
+            // Get changed files
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+
+            const needsReview = files.some(f =>
+              f.filename.startsWith('spark/v2/') || f.filename.startsWith('spark-unified/')
+            );
+
+            if (!needsReview) {
+              core.info('No changes in spark/v2 or spark-unified, skipping review check.');
+              return;
+            }
+
+            // Get reviews
+            const reviews = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+
+            // Find the latest review state per user
+            const latestReviews = new Map();
+            for (const review of reviews.data) {
+              latestReviews.set(review.user.login, review.state);
+            }
+
+            const approvedBy = requiredReviewers.filter(
+              r => latestReviews.get(r) === 'APPROVED'
+            );
+
+            if (approvedBy.length > 0) {
+              core.info(`Approved by: ${approvedBy.join(', ')}`);
+            } else {
+              core.setFailed(
+                `Changes to spark/v2 or spark-unified require approval from at least one of: ${requiredReviewers.join(', ')}`
+              );
+            }
