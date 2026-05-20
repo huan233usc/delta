@@ -67,6 +67,8 @@ trait SnapshotDescriptor extends DeltaLoggingProvider {
 
   def schema: StructType = metadata.schema
 
+  def logPath: Path = deltaLog.logPath
+
   protected[delta] def numOfFilesIfKnown: Option[Long]
   protected[delta] def sizeInBytesIfKnown: Option[Long]
 
@@ -935,7 +937,7 @@ object Snapshot extends DeltaLogging {
  *                    to compute the protocol might result in a protocol downgrade for the table.
  */
 class DummySnapshot(
-    val logPath: Path,
+    override val logPath: Path,
     override val deltaLog: DeltaLog,
     override val metadata: Metadata,
     protocolOpt: Option[Protocol] = None)
